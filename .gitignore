@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Documentation (managed in separate private repo)
+*.md
+.ai-context/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
