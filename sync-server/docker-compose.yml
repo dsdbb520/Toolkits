@@ -1,0 +1,15 @@
+services:
+  sync-server:
+    build: .
+    container_name: toolkits-sync
+    restart: unless-stopped
+    ports:
+      - "3000:3000"       # 改成你 frp 映射的本地端口
+    volumes:
+      - ./data:/data       # 数据库持久化
+    environment:
+      - SYNC_USERNAME=admin
+      - SYNC_PASSWORD=修改为你的密码
+      - JWT_SECRET=修改为一个随机长字符串
+      - PORT=3000
+      - DB_PATH=/data/notes.db

@@ -37,6 +37,107 @@ fn delete_note(state: tauri::State<AppState>, id: String) -> Result<(), String> 
     notes::delete(&db, &id).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn toggle_note_type(state: tauri::State<AppState>, id: String) -> Result<notes::Note, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    notes::toggle_note_type(&db, &id).map_err(|e| e.to_string())
+}
+
+// ─── 同步设置 ──────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SyncSettings {
+    server_url: String,
+    token: String,
+    last_sync_at: i64,
+}
+
+#[tauri::command]
+fn get_sync_settings(state: tauri::State<AppState>) -> SyncSettings {
+    let db = state.db.lock().unwrap();
+    SyncSettings {
+        server_url: notes::get_setting(&db, "server_url").unwrap_or_default(),
+        token: notes::get_setting(&db, "sync_token").unwrap_or_default(),
+        last_sync_at: notes::get_setting(&db, "last_sync_at")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
+    }
+}
+
+#[tauri::command]
+fn save_sync_settings(
+    state: tauri::State<AppState>,
+    server_url: String,
+    token: String,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    notes::set_setting(&db, "server_url", &server_url).map_err(|e| e.to_string())?;
+    notes::set_setting(&db, "sync_token", &token).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ─── 同步 ──────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct SyncRequest {
+    last_sync_at: i64,
+    notes: Vec<notes::Note>,
+}
+
+#[derive(serde::Deserialize)]
+struct SyncResponse {
+    notes: Vec<notes::Note>,
+    synced_at: i64,
+}
+
+#[tauri::command]
+async fn sync_notes(state: tauri::State<'_, AppState>) -> Result<usize, String> {
+    let (server_url, token, last_sync_at, local_changes) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let server_url = notes::get_setting(&db, "server_url").unwrap_or_default();
+        let token = notes::get_setting(&db, "sync_token").unwrap_or_default();
+        let last_sync_at = notes::get_setting(&db, "last_sync_at")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0i64);
+        let changes = notes::get_changes_since(&db, last_sync_at).map_err(|e| e.to_string())?;
+        (server_url, token, last_sync_at, changes)
+    };
+
+    if server_url.is_empty() || token.is_empty() {
+        return Err("未配置同步服务器".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(format!("{}/sync", server_url.trim_end_matches('/')))
+        .bearer_auth(&token)
+        .json(&SyncRequest { last_sync_at, notes: local_changes })
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("同步失败 {}: {}", status, body));
+    }
+
+    let sync_resp: SyncResponse = resp.json().await.map_err(|e| e.to_string())?;
+    let count = sync_resp.notes.len();
+
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        notes::apply_remote_notes(&db, &sync_resp.notes).map_err(|e| e.to_string())?;
+        notes::set_setting(&db, "last_sync_at", &sync_resp.synced_at.to_string())
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(count)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -44,8 +145,8 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
-            let db_path = data_dir.join("notes.db");
-            let conn = Connection::open(db_path).expect("failed to open database");
+            let conn = Connection::open(data_dir.join("notes.db"))
+                .expect("failed to open database");
             notes::init_db(&conn).expect("failed to init database");
             app.manage(AppState { db: Mutex::new(conn) });
             Ok(())
@@ -55,6 +156,10 @@ pub fn run() {
             create_note,
             update_note,
             delete_note,
+            toggle_note_type,
+            get_sync_settings,
+            save_sync_settings,
+            sync_notes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
