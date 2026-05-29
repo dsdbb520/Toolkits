@@ -1,9 +1,16 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+/* TipTap editor */
+.tiptap {
+  min-height: 100%;
+}
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: #52525b;
+  float: left;
+  height: 0;
+  pointer-events: none;
 }
 
 html,
@@ -12,6 +19,9 @@ body,
   height: 100%;
   width: 100%;
   overflow: hidden;
-  font-family: Inter, system-ui, sans-serif;
+  font-family: Inter, "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.7;
+  letter-spacing: 0.01em;
   -webkit-font-smoothing: antialiased;
 }

@@ -44,21 +44,21 @@ export default function Toolbox() {
   const navigate = useNavigate();
 
   return (
-    <div className="flex h-full flex-col p-6">
-      <h1 className="mb-6 text-xl font-semibold text-zinc-100">工具箱</h1>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+    <div className="flex h-full flex-col p-10">
+      <h1 className="mb-10 text-2xl font-semibold text-zinc-100">工具箱</h1>
+      <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4">
         {tools.map(({ to, icon: Icon, label, desc }) => (
           <button
             key={to}
             onClick={() => navigate(to)}
-            className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-5 text-left transition-colors hover:border-zinc-600 hover:bg-zinc-800"
+            className="flex flex-col gap-5 rounded-xl border border-zinc-800 bg-zinc-900 p-7 text-left transition-colors hover:border-zinc-600 hover:bg-zinc-800"
           >
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-800">
-              <Icon size={20} className="text-blue-400" />
+            <div className="flex h-13 w-13 items-center justify-center rounded-xl bg-zinc-800 p-3">
+              <Icon size={24} className="text-blue-400" />
             </div>
             <div>
-              <p className="text-sm font-medium text-zinc-100">{label}</p>
-              <p className="mt-0.5 text-xs text-zinc-500">{desc}</p>
+              <p className="text-base font-medium text-zinc-100">{label}</p>
+              <p className="mt-1.5 text-sm leading-relaxed text-zinc-500">{desc}</p>
             </div>
           </button>
         ))}
