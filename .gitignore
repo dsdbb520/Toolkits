@@ -16,6 +16,9 @@ dist-ssr
 *.md
 .ai-context/
 
+sync-server/target/
+sync-server/Cargo.lock
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

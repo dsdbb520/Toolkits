@@ -46,6 +46,18 @@ pub fn init_db(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS download_history (
+            id         TEXT PRIMARY KEY,
+            bvid       TEXT NOT NULL DEFAULT '',
+            title      TEXT NOT NULL DEFAULT '',
+            cover      TEXT NOT NULL DEFAULT '',
+            part       TEXT NOT NULL DEFAULT '',
+            quality    INTEGER NOT NULL DEFAULT 0,
+            mode       TEXT NOT NULL DEFAULT '',
+            file_path  TEXT NOT NULL DEFAULT '',
+            file_size  INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT 0
         );",
     )?;
     // 迁移：为旧数据库添加缺失列

@@ -1,3 +1,5 @@
+mod bili;
+mod media;
 mod notes;
 
 use rusqlite::Connection;
@@ -160,6 +162,19 @@ pub fn run() {
             get_sync_settings,
             save_sync_settings,
             sync_notes,
+            bili::bili_check_ffmpeg,
+            bili::bili_get_settings,
+            bili::bili_save_settings,
+            bili::bili_pick_dir,
+            bili::bili_get_video_info,
+            bili::bili_get_play_info,
+            bili::bili_download,
+            bili::bili_get_history,
+            bili::bili_delete_history,
+            bili::bili_clear_history,
+            media::media_open_file,
+            media::media_get_info,
+            media::media_process,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -5,6 +5,7 @@ import {
   Gamepad2,
   Camera,
   ImageIcon,
+  Film,
 } from "lucide-react";
 
 const tools = [
@@ -19,6 +20,12 @@ const tools = [
     icon: Download,
     label: "B站下载",
     desc: "下载 B站视频，支持多清晰度",
+  },
+  {
+    to: "/toolbox/media",
+    icon: Film,
+    label: "媒体编辑",
+    desc: "裁剪、提取音频、格式转换",
   },
   {
     to: "/toolbox/steam",
