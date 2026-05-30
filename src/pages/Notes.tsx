@@ -7,8 +7,6 @@ import { Underline } from "@tiptap/extension-underline";
 import { TextStyle } from "@tiptap/extension-text-style";
 import { Color } from "@tiptap/extension-color";
 import { Highlight } from "@tiptap/extension-highlight";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
   ArrowLeft, Plus, Trash2, Search, FileText,
   Bold, Italic, Underline as UnderlineIcon,
@@ -186,7 +184,7 @@ export default function Notes() {
     setTitle(note.title);
     setIsEditing(!note.is_note);
     // false = 不触发 onUpdate，避免加载内容时误保存
-    editor?.commands.setContent(note.content || "", false);
+    editor?.commands.setContent(note.content || "");
   }
 
   const saveTitle = useCallback(

@@ -1,5 +1,6 @@
 mod bili;
 mod media;
+mod image_editor;
 mod notes;
 
 use rusqlite::Connection;
@@ -175,6 +176,14 @@ pub fn run() {
             media::media_open_file,
             media::media_get_info,
             media::media_process,
+            image_editor::image_open_file,
+            image_editor::image_get_info,
+            image_editor::image_save_copy,
+            image_editor::image_crop,
+            image_editor::image_rotate,
+            image_editor::image_resize,
+            image_editor::image_compress,
+            image_editor::image_convert,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
