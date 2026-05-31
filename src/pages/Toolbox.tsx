@@ -6,6 +6,7 @@ import {
   Camera,
   ImageIcon,
   Film,
+  Send,
 } from "lucide-react";
 
 const tools = [
@@ -44,6 +45,12 @@ const tools = [
     icon: ImageIcon,
     label: "图片编辑",
     desc: "裁剪、调色、格式转换",
+  },
+  {
+    to: "/toolbox/telegram",
+    icon: Send,
+    label: "TG 下载",
+    desc: "批量下载 Telegram 图片和视频",
   },
 ];
 

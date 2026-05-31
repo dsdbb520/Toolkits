@@ -2,13 +2,16 @@ mod bili;
 mod media;
 mod image_editor;
 mod notes;
+mod steam;
+mod telegram;
 
 use rusqlite::Connection;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 pub struct AppState {
     pub db: Mutex<Connection>,
+    pub tg: telegram::TgState,
 }
 
 #[tauri::command]
@@ -151,7 +154,9 @@ pub fn run() {
             let conn = Connection::open(data_dir.join("notes.db"))
                 .expect("failed to open database");
             notes::init_db(&conn).expect("failed to init database");
-            app.manage(AppState { db: Mutex::new(conn) });
+            let tg = Arc::new(tokio::sync::Mutex::new(telegram::TgRuntimeState::new()));
+            app.manage(tg.clone()); // 让 tauri::State<'_, TgState> 注入可用
+            app.manage(AppState { db: Mutex::new(conn), tg });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -184,6 +189,25 @@ pub fn run() {
             image_editor::image_resize,
             image_editor::image_compress,
             image_editor::image_convert,
+            steam::steam_get_path,
+            steam::steam_get_accounts,
+            steam::steam_is_running,
+            steam::steam_get_userdata_path,
+            steam::steam_switch_account,
+            telegram::tg_get_settings,
+            telegram::tg_save_settings,
+            telegram::tg_is_authenticated,
+            telegram::tg_request_code,
+            telegram::tg_sign_in,
+            telegram::tg_sign_out,
+            telegram::tg_get_dialogs,
+            telegram::tg_download_media,
+            telegram::tg_scan_cache,
+            telegram::tg_pick_dir,
+            telegram::tg_get_suggested_paths,
+            telegram::tg_get_watch_dirs,
+            telegram::tg_watch_start,
+            telegram::tg_watch_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
