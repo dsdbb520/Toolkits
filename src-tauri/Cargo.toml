@@ -1,12 +1,12 @@
 [package]
-name = "tauri-app"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+name = "seraph-toolkits"
+version = "1.1.0"
+description = "SeraphToolkits"
+authors = ["Seraph"]
 edition = "2021"
 
 [lib]
-name = "tauri_app_lib"
+name = "seraph_toolkits_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
