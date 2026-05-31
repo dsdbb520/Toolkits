@@ -4346,6 +4346,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "seraph-toolkits"
+version = "1.1.0"
+dependencies = [
+ "futures-util",
+ "grammers-client",
+ "grammers-session",
+ "image",
+ "imageproc",
+ "notify",
+ "reqwest 0.12.28",
+ "rfd",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "tokio",
+ "uuid",
+ "windows-sys 0.59.0",
+ "winreg 0.52.0",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4877,30 +4901,6 @@ dependencies = [
  "webview2-com",
  "window-vibrancy",
  "windows",
-]
-
-[[package]]
-name = "tauri-app"
-version = "0.1.0"
-dependencies = [
- "futures-util",
- "grammers-client",
- "grammers-session",
- "image",
- "imageproc",
- "notify",
- "reqwest 0.12.28",
- "rfd",
- "rusqlite",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "tokio",
- "uuid",
- "windows-sys 0.59.0",
- "winreg 0.52.0",
 ]
 
 [[package]]

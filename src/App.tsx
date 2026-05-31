@@ -5,6 +5,7 @@ import Toolbox from "@/pages/Toolbox";
 import Notes from "@/pages/Notes";
 import BiliDownload from "@/pages/BiliDownload";
 import SteamSwitch from "@/pages/SteamSwitch";
+import SteamPrice from "@/pages/SteamPrice";
 import Screenshot from "@/pages/Screenshot";
 import ImageEditor from "@/pages/ImageEditor";
 import MediaEditor from "@/pages/MediaEditor";
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="toolbox/notes" element={<Notes />} />
           <Route path="toolbox/bili" element={<BiliDownload />} />
           <Route path="toolbox/steam" element={<SteamSwitch />} />
+          <Route path="toolbox/steam-price" element={<SteamPrice />} />
           <Route path="toolbox/screenshot" element={<Screenshot />} />
           <Route path="toolbox/image" element={<ImageEditor />} />
           <Route path="toolbox/media" element={<MediaEditor />} />

@@ -3,6 +3,7 @@ mod media;
 mod image_editor;
 mod notes;
 mod steam;
+mod steam_price;
 mod telegram;
 
 use rusqlite::Connection;
@@ -154,6 +155,11 @@ pub fn run() {
             let conn = Connection::open(data_dir.join("notes.db"))
                 .expect("failed to open database");
             notes::init_db(&conn).expect("failed to init database");
+            // 初始化 Steam 价格查询的代理设置（从数据库读取，默认跟随系统代理）
+            let proxy_mode =
+                notes::get_setting(&conn, "steam_proxy_mode").unwrap_or_else(|| "system".to_string());
+            let proxy_url = notes::get_setting(&conn, "steam_proxy_url").unwrap_or_default();
+            steam_price::apply_proxy(&proxy_mode, &proxy_url);
             let tg = Arc::new(tokio::sync::Mutex::new(telegram::TgRuntimeState::new()));
             app.manage(tg.clone()); // 让 tauri::State<'_, TgState> 注入可用
             app.manage(AppState { db: Mutex::new(conn), tg });
@@ -195,6 +201,10 @@ pub fn run() {
             steam::steam_launch,
             steam::steam_get_userdata_path,
             steam::steam_switch_account,
+            steam_price::steam_price_search,
+            steam_price::steam_price_query,
+            steam_price::steam_price_get_proxy,
+            steam_price::steam_price_set_proxy,
             telegram::tg_get_settings,
             telegram::tg_save_settings,
             telegram::tg_is_authenticated,

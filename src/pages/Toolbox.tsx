@@ -7,6 +7,7 @@ import {
   ImageIcon,
   Film,
   Send,
+  DollarSign,
 } from "lucide-react";
 
 const tools = [
@@ -33,6 +34,12 @@ const tools = [
     icon: Gamepad2,
     label: "Steam 切换",
     desc: "快速切换 Steam 账号",
+  },
+  {
+    to: "/toolbox/steam-price",
+    icon: DollarSign,
+    label: "Steam 区域价格",
+    desc: "对比各区游戏价格与锁区情况",
   },
   {
     to: "/toolbox/screenshot",
