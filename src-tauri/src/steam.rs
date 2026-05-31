@@ -260,21 +260,120 @@ fn set_autologin(_account_name: &str) -> Result<(), String> {
     Err("仅支持 Windows".to_string())
 }
 
-// ─── 进程控制 ──────────────────────────────────────────────────
+// ─── 进程控制（原生 Win32 API，避免 tasklist/taskkill 的进程启动开销）──
+
+#[cfg(windows)]
+mod win {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, TerminateProcess, WaitForMultipleObjects, PROCESS_SYNCHRONIZE,
+        PROCESS_TERMINATE,
+    };
+
+    /// 需要一并结束的 Steam 相关进程。其中 steamwebhelper.exe 是新版 UI 的
+    /// CEF 宿主，若残留会让重启的 steam.exe 等它退出（约 10 秒超时）。
+    const STEAM_PROCESSES: [&str; 5] = [
+        "steam.exe",
+        "steamwebhelper.exe",
+        "gameoverlayui.exe",
+        "steamerrorreporter.exe",
+        "steamservice.exe",
+    ];
+
+    fn wide_to_string(buf: &[u16]) -> String {
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        String::from_utf16_lossy(&buf[..len])
+    }
+
+    /// 枚举所有进程，返回 (pid, exe 名)
+    fn snapshot() -> Vec<(u32, String)> {
+        let mut procs = Vec::new();
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snapshot == INVALID_HANDLE_VALUE {
+                return procs;
+            }
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            if Process32FirstW(snapshot, &mut entry) != 0 {
+                loop {
+                    procs.push((entry.th32ProcessID, wide_to_string(&entry.szExeFile)));
+                    if Process32NextW(snapshot, &mut entry) == 0 {
+                        break;
+                    }
+                }
+            }
+            CloseHandle(snapshot);
+        }
+        procs
+    }
+
+    fn is_steam_process(name: &str) -> bool {
+        STEAM_PROCESSES.iter().any(|n| name.eq_ignore_ascii_case(n))
+    }
+
+    pub fn is_running() -> bool {
+        snapshot().iter().any(|(_, name)| name.eq_ignore_ascii_case("steam.exe"))
+    }
+
+    /// 强制结束 Steam 及其相关进程（steamwebhelper 等），并等待它们真正退出
+    /// （所有句柄合计最多 wait_ms 毫秒）。
+    ///
+    /// 关键点：只对 `TerminateProcess` **真正成功** 的进程才加入等待，否则
+    /// 像 steamservice.exe 这类「能拿到句柄但杀不掉」的进程会让等待一直
+    /// 卡到满超时。用 WaitForMultipleObjects 一次性等全部，封顶总耗时。
+    pub fn kill_and_wait(wait_ms: u32) {
+        unsafe {
+            let mut handles: Vec<HANDLE> = Vec::new();
+            for (pid, name) in snapshot() {
+                if !is_steam_process(&name) {
+                    continue;
+                }
+                // 同时请求 TERMINATE 与 SYNCHRONIZE，便于结束后等待退出
+                let h = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid);
+                if h.is_null() {
+                    continue;
+                }
+                if TerminateProcess(h, 1) != 0 {
+                    handles.push(h); // 仅等待确实已结束的进程
+                } else {
+                    CloseHandle(h);
+                }
+            }
+            if !handles.is_empty() {
+                // bWaitAll = TRUE，等全部结束；总耗时封顶 wait_ms
+                WaitForMultipleObjects(handles.len() as u32, handles.as_ptr(), 1, wait_ms);
+                for h in handles {
+                    CloseHandle(h);
+                }
+            }
+        }
+    }
+
+    /// 借助 explorer.exe 启动 Steam：我们 spawn 的 explorer 会立即把启动交给
+    /// 桌面 shell 并退出，启动出的 Steam 与本进程完全解耦——不在同一 Job、
+    /// 不继承句柄、不会触发 WaitForInputIdle/DDE 等同步等待。直接 CreateProcess
+    /// 或 ShellExecuteW 拉起刚被强杀的同名大进程都实测阻塞 ~15s，此法可绕开。
+    pub fn launch_detached(exe: &std::path::Path) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("explorer.exe")
+            .arg(exe)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("启动 Steam 失败: {}", e))
+    }
+}
 
 fn is_steam_running() -> bool {
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let out = std::process::Command::new("tasklist")
-            .args(["/FI", "IMAGENAME eq steam.exe", "/NH"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output();
-        if let Ok(out) = out {
-            return String::from_utf8_lossy(&out.stdout).to_lowercase().contains("steam.exe");
-        }
-        false
+        win::is_running()
     }
     #[cfg(not(windows))]
     {
@@ -400,6 +499,23 @@ pub fn steam_is_running() -> bool {
     is_steam_running()
 }
 
+/// 直接启动 Steam（不切换账号，用于当前账号已正确但 Steam 未运行的情况）
+#[tauri::command]
+pub fn steam_launch() -> Result<(), String> {
+    let steam_path = steam_install_path().ok_or("未找到 Steam 安装路径")?;
+    let steam_exe = steam_exe_path(&steam_path);
+    if is_steam_running() {
+        return Ok(()); // 已在运行，无需重复启动
+    }
+    #[cfg(windows)]
+    win::launch_detached(&steam_exe)?;
+    #[cfg(not(windows))]
+    std::process::Command::new(&steam_exe)
+        .spawn()
+        .map_err(|e| format!("启动 Steam 失败: {}", e))?;
+    Ok(())
+}
+
 /// 返回该账号的 userdata 目录（不存在则回退到 userdata 根目录）
 #[tauri::command]
 pub fn steam_get_userdata_path(steamid32: String) -> Result<String, String> {
@@ -424,41 +540,17 @@ pub async fn steam_switch_account(account_name: String) -> Result<(), String> {
     let steam_path = steam_install_path().ok_or("未找到 Steam 安装路径")?;
     let steam_exe = steam_exe_path(&steam_path);
 
-    // 1) 写注册表 AutoLoginUser
+    // 先强杀再写配置，避免 Steam 退出时回写覆盖注册表和 vdf。
+    #[cfg(windows)]
+    win::kill_and_wait(3000);
+
     set_autologin(&account_name)?;
-    // 2) 更新 loginusers.vdf 的 MostRecent（失败不阻断）
     let _ = set_most_recent(&steam_path, &account_name);
 
-    // 3) 若 Steam 正在运行，优雅关闭
-    if is_steam_running() {
-        let _ = std::process::Command::new(&steam_exe)
-            .arg("-shutdown")
-            .spawn();
-        // 最多等待 ~15 秒
-        let mut closed = false;
-        for _ in 0..30 {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            if !is_steam_running() {
-                closed = true;
-                break;
-            }
-        }
-        // 仍未退出则强制结束
-        if !closed {
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/F", "/IM", "steam.exe"])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .output();
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
-    }
-
-    // 4) 重新启动 Steam（自动登录到目标账号）
+    // 经 explorer 解耦启动，避免 CreateProcess 同步阻塞。
+    #[cfg(windows)]
+    win::launch_detached(&steam_exe)?;
+    #[cfg(not(windows))]
     std::process::Command::new(&steam_exe)
         .spawn()
         .map_err(|e| format!("启动 Steam 失败: {}", e))?;

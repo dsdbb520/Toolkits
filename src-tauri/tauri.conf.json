@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tauri-app",
-  "version": "0.1.0",
-  "identifier": "com.dsdbb.tauri-app",
+  "productName": "SeraphToolkits",
+  "version": "1.1.0",
+  "identifier": "com.seraph.toolkits",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Toolkits",
+        "title": "SeraphToolkits",
         "width": 1280,
         "height": 800,
         "minWidth": 960,
@@ -30,12 +30,19 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Seraph",
+    "copyright": "Copyright © 2026 Seraph",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "wix": {
+        "language": "zh-CN"
+      }
+    }
   }
 }

@@ -192,6 +192,7 @@ pub fn run() {
             steam::steam_get_path,
             steam::steam_get_accounts,
             steam::steam_is_running,
+            steam::steam_launch,
             steam::steam_get_userdata_path,
             steam::steam_switch_account,
             telegram::tg_get_settings,

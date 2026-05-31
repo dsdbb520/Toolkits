@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Gamepad2, RefreshCw, Copy, Check, Folder,
-  LogIn, Loader2, AlertCircle, Star, User as UserIcon,
+  LogIn, Loader2, AlertCircle, Star, User as UserIcon, Play,
 } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -106,6 +106,16 @@ export default function SteamSwitch() {
       setError(String(e));
     } finally {
       setSwitching(null);
+    }
+  };
+
+  const handleLaunch = async () => {
+    setError("");
+    try {
+      await invoke("steam_launch");
+      setNotice("Steam 正在启动…");
+    } catch (e) {
+      setError(String(e));
     }
   };
 
@@ -228,24 +238,27 @@ export default function SteamSwitch() {
 
                 {/* 操作 */}
                 <div className="flex gap-2">
-                  <button
-                    onClick={() => handleSwitch(acc)}
-                    disabled={acc.is_current || switching !== null}
-                    className={cn(
-                      "flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed",
-                      acc.is_current
-                        ? "bg-zinc-800 text-zinc-500"
-                        : "bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
-                    )}
-                  >
-                    {switching === acc.account_name ? (
-                      <><Loader2 size={14} className="animate-spin" /> 切换中…</>
-                    ) : acc.is_current ? (
-                      <><Check size={14} /> 当前账号</>
-                    ) : (
-                      <><LogIn size={14} /> 切换到此账号</>
-                    )}
-                  </button>
+                  {acc.is_current ? (
+                    <button
+                      onClick={handleLaunch}
+                      disabled={switching !== null}
+                      className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Play size={14} /> 启动 Steam
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleSwitch(acc)}
+                      disabled={switching !== null}
+                      className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-2 text-sm font-medium text-zinc-100 transition-colors hover:bg-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {switching === acc.account_name ? (
+                        <><Loader2 size={14} className="animate-spin" /> 切换中…</>
+                      ) : (
+                        <><LogIn size={14} /> 切换到此账号</>
+                      )}
+                    </button>
+                  )}
                   <button
                     onClick={() => handleOpenUserdata(acc)}
                     title="打开 userdata 文件夹"
