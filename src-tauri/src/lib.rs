@@ -57,6 +57,7 @@ struct SyncSettings {
     server_url: String,
     token: String,
     last_sync_at: i64,
+    username: String,
 }
 
 #[tauri::command]
@@ -68,6 +69,7 @@ fn get_sync_settings(state: tauri::State<AppState>) -> SyncSettings {
         last_sync_at: notes::get_setting(&db, "last_sync_at")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0),
+        username: notes::get_setting(&db, "sync_username").unwrap_or_default(),
     }
 }
 
@@ -83,7 +85,71 @@ fn save_sync_settings(
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+struct AuthResponse {
+    token: String,
+}
+
+#[tauri::command]
+async fn auth_sync(
+    state: tauri::State<'_, AppState>,
+    server_url: String,
+    username: String,
+    password: String,
+    is_register: bool,
+) -> Result<(), String> {
+    let endpoint = if is_register { "register" } else { "login" };
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .post(format!("{}/{}", server_url.trim_end_matches('/'), endpoint))
+        .json(&serde_json::json!({ "username": username, "password": password }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        let msg = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v["error"].as_str().map(str::to_owned))
+            .unwrap_or(body);
+        return Err(msg);
+    }
+
+    let auth_resp: AuthResponse = resp.json().await.map_err(|e| e.to_string())?;
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    notes::set_setting(&db, "server_url", &server_url).map_err(|e| e.to_string())?;
+    notes::set_setting(&db, "sync_token", &auth_resp.token).map_err(|e| e.to_string())?;
+    notes::set_setting(&db, "sync_username", &username).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn logout_sync(state: tauri::State<AppState>) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    notes::set_setting(&db, "sync_token", "").map_err(|e| e.to_string())?;
+    notes::set_setting(&db, "sync_username", "").map_err(|e| e.to_string())?;
+    notes::set_setting(&db, "last_sync_at", "0").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // ─── 同步 ──────────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct ConflictPair {
+    mine: notes::Note,
+    theirs: notes::Note,
+}
+
+#[derive(serde::Serialize)]
+struct SyncResult {
+    updated: usize,
+    conflicts: Vec<ConflictPair>,
+}
 
 #[derive(serde::Serialize)]
 struct SyncRequest {
@@ -94,11 +160,12 @@ struct SyncRequest {
 #[derive(serde::Deserialize)]
 struct SyncResponse {
     notes: Vec<notes::Note>,
+    conflicts: Vec<ConflictPair>,
     synced_at: i64,
 }
 
 #[tauri::command]
-async fn sync_notes(state: tauri::State<'_, AppState>) -> Result<usize, String> {
+async fn sync_notes(state: tauri::State<'_, AppState>) -> Result<SyncResult, String> {
     let (server_url, token, last_sync_at, local_changes) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let server_url = notes::get_setting(&db, "server_url").unwrap_or_default();
@@ -133,7 +200,7 @@ async fn sync_notes(state: tauri::State<'_, AppState>) -> Result<usize, String> 
     }
 
     let sync_resp: SyncResponse = resp.json().await.map_err(|e| e.to_string())?;
-    let count = sync_resp.notes.len();
+    let updated = sync_resp.notes.len();
 
     {
         let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -142,7 +209,42 @@ async fn sync_notes(state: tauri::State<'_, AppState>) -> Result<usize, String> 
             .map_err(|e| e.to_string())?;
     }
 
-    Ok(count)
+    Ok(SyncResult { updated, conflicts: sync_resp.conflicts })
+}
+
+#[tauri::command]
+fn resolve_conflict(
+    state: tauri::State<AppState>,
+    mine: notes::Note,
+    theirs: notes::Note,
+    choice: String,
+) -> Result<String, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    match choice.as_str() {
+        "theirs" => {
+            notes::force_apply_note(&db, &theirs).map_err(|e| e.to_string())?;
+            Ok(String::new())
+        }
+        "mine" => {
+            notes::update(&db, &mine.id, &mine.title, &mine.content)
+                .map_err(|e| e.to_string())?;
+            notes::set_setting(&db, "last_sync_at", &theirs.updated_at.to_string())
+                .map_err(|e| e.to_string())?;
+            Ok(String::new())
+        }
+        "both" => {
+            // 原笔记保留服务器版本，新建一条含本机内容的笔记并返回其 ID
+            notes::force_apply_note(&db, &theirs).map_err(|e| e.to_string())?;
+            let new_note = notes::create_with_content(
+                &db,
+                &format!("{} (本机副本)", mine.title),
+                &mine.content,
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(new_note.id)
+        }
+        _ => Err("invalid choice".to_string()),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -173,7 +275,10 @@ pub fn run() {
             toggle_note_type,
             get_sync_settings,
             save_sync_settings,
+            auth_sync,
+            logout_sync,
             sync_notes,
+            resolve_conflict,
             bili::bili_check_ffmpeg,
             bili::bili_get_settings,
             bili::bili_save_settings,
@@ -201,6 +306,9 @@ pub fn run() {
             steam::steam_launch,
             steam::steam_get_userdata_path,
             steam::steam_switch_account,
+            steam::steam_add_account,
+            image_editor::file_save_as,
+            image_editor::file_overwrite,
             steam_price::steam_price_search,
             steam_price::steam_price_query,
             steam_price::steam_price_get_proxy,

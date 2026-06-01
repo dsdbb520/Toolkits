@@ -29,6 +29,17 @@ interface SyncSettings {
   server_url: string;
   token: string;
   last_sync_at: number;
+  username: string;
+}
+
+interface ConflictPair {
+  mine: Note;
+  theirs: Note;
+}
+
+interface SyncResult {
+  updated: number;
+  conflicts: ConflictPair[];
 }
 
 const PRESET_COLORS = [
@@ -76,15 +87,21 @@ export default function Notes() {
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [showSyncPanel, setShowSyncPanel] = useState(false);
-  const [syncSettings, setSyncSettings] = useState<SyncSettings>({ server_url: "", token: "", last_sync_at: 0 });
+  const [syncSettings, setSyncSettings] = useState<SyncSettings>({ server_url: "", token: "", last_sync_at: 0, username: "" });
+  const [syncInput, setSyncInput] = useState({ serverUrl: "", username: "", password: "" });
   const [syncStatus, setSyncStatus] = useState("");
   const [syncing, setSyncing] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [conflicts, setConflicts] = useState<ConflictPair[]>([]);
+  const [conflictIdx, setConflictIdx] = useState(0);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 用 ref 追踪最新值，避免 useEditor 回调中的闭包过期问题
   const selectedIdRef = useRef<string | null>(null);
   const titleRef = useRef("");
   const isEditingRef = useRef(false);
   const contentRef = useRef("");
+  // 切换笔记时加载内容期间屏蔽 onUpdate，防止 TipTap 把 setContent 当成用户编辑
+  const isLoadingContent = useRef(false);
 
   const selected = notes.find((n) => n.id === selectedId) ?? null;
 
@@ -108,6 +125,7 @@ export default function Notes() {
     onTransaction: () => forceRender((n) => n + 1),
     onSelectionUpdate: () => forceRender((n) => n + 1),
     onUpdate: ({ editor }) => {
+      if (isLoadingContent.current) return;
       if (!selectedIdRef.current || !isEditingRef.current) return;
       const html = editor.getHTML();
       contentRef.current = html; // 始终追踪最新内容
@@ -121,14 +139,22 @@ export default function Notes() {
   });
 
   useEffect(() => {
+    let cancelled = false;
+
     invoke<Note[]>("get_notes").then((data) => {
+      if (cancelled) return;
       setNotes(data);
       if (data.length > 0) selectNote(data[0]);
     });
-    invoke<SyncSettings>("get_sync_settings").then(setSyncSettings);
+    invoke<SyncSettings>("get_sync_settings").then((s) => {
+      if (cancelled) return;
+      setSyncSettings(s);
+      setSyncInput((prev) => ({ ...prev, serverUrl: s.server_url }));
+    });
 
     // 组件卸载时立即执行未完成的保存，防止导航离开时丢失数据
     return () => {
+      cancelled = true;
       if (saveTimer.current) {
         clearTimeout(saveTimer.current);
         saveTimer.current = null;
@@ -147,6 +173,18 @@ export default function Notes() {
   useEffect(() => {
     if (selected) setIsEditing(!selected.is_note);
   }, [selectedId]);
+
+  // editor 初始化时比 get_notes 慢，导致 selectNote 里 setContent 是空操作
+  // 当 editor 就绪后，补一次内容填充
+  useEffect(() => {
+    if (!editor || !selectedId) return;
+    const note = notes.find((n) => n.id === selectedId);
+    if (!note) return;
+    isLoadingContent.current = true;
+    editor.commands.setContent(note.content || "");
+    setTimeout(() => { isLoadingContent.current = false; }, 0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor]); // 只在 editor 从 null 变为实例时触发
 
   // 同步编辑器可编辑状态
   useEffect(() => {
@@ -183,8 +221,9 @@ export default function Notes() {
     setSelectedId(note.id);
     setTitle(note.title);
     setIsEditing(!note.is_note);
-    // false = 不触发 onUpdate，避免加载内容时误保存
+    isLoadingContent.current = true;
     editor?.commands.setContent(note.content || "");
+    setTimeout(() => { isLoadingContent.current = false; }, 0);
   }
 
   const saveTitle = useCallback(
@@ -228,12 +267,18 @@ export default function Notes() {
     setSyncing(true);
     setSyncStatus("同步中...");
     try {
-      const count = await invoke<number>("sync_notes");
-      setSyncStatus(`同步完成，更新了 ${count} 条笔记`);
+      const result = await invoke<SyncResult>("sync_notes");
       const data = await invoke<Note[]>("get_notes");
       setNotes(data);
       const settings = await invoke<SyncSettings>("get_sync_settings");
       setSyncSettings(settings);
+      if (result.conflicts.length > 0) {
+        setConflicts(result.conflicts);
+        setConflictIdx(0);
+        setSyncStatus(`同步完成，有 ${result.conflicts.length} 条冲突需要处理`);
+      } else {
+        setSyncStatus(`同步完成，更新了 ${result.updated} 条笔记`);
+      }
     } catch (e) {
       setSyncStatus(`同步失败：${e}`);
     } finally {
@@ -241,12 +286,60 @@ export default function Notes() {
     }
   }
 
-  async function handleSaveSyncSettings() {
-    await invoke("save_sync_settings", {
-      serverUrl: syncSettings.server_url,
-      token: syncSettings.token,
-    });
-    setSyncStatus("设置已保存");
+  async function handleResolve(choice: "mine" | "theirs" | "both") {
+    const conflict = conflicts[conflictIdx];
+    try {
+      const newNoteId = await invoke<string>("resolve_conflict", { mine: conflict.mine, theirs: conflict.theirs, choice });
+      const data = await invoke<Note[]>("get_notes");
+      setNotes(data);
+      // "两个都保留"：跳转到新建的本机副本，让用户能看到自己的内容
+      if (choice === "both" && newNoteId) {
+        const newNote = data.find((n) => n.id === newNoteId);
+        if (newNote) selectNote(newNote);
+      } else if (selectedId === conflict.mine.id || selectedId === conflict.theirs.id) {
+        const resolvedId = choice === "mine" ? conflict.mine.id : conflict.theirs.id;
+        const updated = data.find((n) => n.id === resolvedId);
+        if (updated) selectNote(updated);
+      }
+      if (conflictIdx + 1 < conflicts.length) {
+        setConflictIdx((i) => i + 1);
+      } else {
+        setConflicts([]);
+        setConflictIdx(0);
+        setSyncStatus("冲突已全部解决");
+      }
+    } catch (e) {
+      setSyncStatus(`解决冲突失败：${e}`);
+    }
+  }
+
+  async function handleAuth(isRegister: boolean) {
+    setAuthLoading(true);
+    setSyncStatus("");
+    try {
+      await invoke("auth_sync", {
+        serverUrl: syncInput.serverUrl,
+        username: syncInput.username,
+        password: syncInput.password,
+        isRegister,
+      });
+      const settings = await invoke<SyncSettings>("get_sync_settings");
+      setSyncSettings(settings);
+      setSyncStatus(isRegister ? "注册成功，已自动登录" : "登录成功");
+      setSyncInput((prev) => ({ ...prev, password: "" }));
+    } catch (e) {
+      setSyncStatus(`${isRegister ? "注册" : "登录"}失败：${e}`);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    await invoke("logout_sync");
+    const settings = await invoke<SyncSettings>("get_sync_settings");
+    setSyncSettings(settings);
+    setSyncInput((prev) => ({ ...prev, serverUrl: settings.server_url, username: "", password: "" }));
+    setSyncStatus("已退出登录");
   }
 
   const filtered = notes.filter(
@@ -490,60 +583,183 @@ export default function Notes() {
         {showSyncPanel && (
           <div className="flex w-72 flex-col border-l border-zinc-800 bg-zinc-900/60 p-5 gap-4">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-zinc-100">同步设置</span>
+              <span className="text-sm font-medium text-zinc-100">云同步</span>
               <button onClick={() => setShowSyncPanel(false)} className="text-zinc-500 hover:text-zinc-300">
                 <X size={14} />
               </button>
             </div>
 
-            <div className="flex flex-col gap-2">
-              <label className="text-xs text-zinc-400">服务器地址</label>
-              <input
-                value={syncSettings.server_url}
-                onChange={(e) => setSyncSettings((s) => ({ ...s, server_url: e.target.value }))}
-                placeholder="http://your-server:3000"
-                className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none placeholder-zinc-600 focus:ring-1 focus:ring-zinc-600"
-              />
-            </div>
+            {syncSettings.token ? (
+              /* 已登录状态 */
+              <>
+                <div className="rounded-lg bg-zinc-800 px-3 py-3 flex flex-col gap-1">
+                  <p className="text-xs text-zinc-500">已登录账户</p>
+                  <p className="text-sm text-zinc-100 font-medium">{syncSettings.username}</p>
+                  <p className="text-xs text-zinc-600 truncate">{syncSettings.server_url}</p>
+                </div>
 
-            <div className="flex flex-col gap-2">
-              <label className="text-xs text-zinc-400">访问令牌（Token）</label>
-              <input
-                value={syncSettings.token}
-                onChange={(e) => setSyncSettings((s) => ({ ...s, token: e.target.value }))}
-                placeholder="从服务端 /login 获取"
-                type="password"
-                className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none placeholder-zinc-600 focus:ring-1 focus:ring-zinc-600"
-              />
-            </div>
+                <button
+                  onClick={handleSync}
+                  disabled={syncing}
+                  className="flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                >
+                  <RefreshCw size={14} className={syncing ? "animate-spin" : ""} />
+                  {syncing ? "同步中..." : "立即同步"}
+                </button>
 
-            <button
-              onClick={handleSaveSyncSettings}
-              className="rounded-lg bg-zinc-700 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-600 transition-colors"
-            >
-              保存设置
-            </button>
+                <button
+                  onClick={handleLogout}
+                  className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-400 hover:bg-zinc-700 hover:text-zinc-100 transition-colors"
+                >
+                  退出登录
+                </button>
 
-            <button
-              onClick={handleSync}
-              disabled={syncing}
-              className="flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
-            >
-              <RefreshCw size={14} className={syncing ? "animate-spin" : ""} />
-              {syncing ? "同步中..." : "立即同步"}
-            </button>
+                {syncSettings.last_sync_at > 0 && (
+                  <p className="text-xs text-zinc-500">
+                    上次同步：{formatDate(syncSettings.last_sync_at)}
+                  </p>
+                )}
+              </>
+            ) : (
+              /* 未登录状态 */
+              <>
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs text-zinc-400">服务器地址</label>
+                  <input
+                    value={syncInput.serverUrl}
+                    onChange={(e) => setSyncInput((s) => ({ ...s, serverUrl: e.target.value }))}
+                    placeholder="http://your-server:3000"
+                    className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none placeholder-zinc-600 focus:ring-1 focus:ring-zinc-600"
+                  />
+                </div>
 
-            {syncSettings.last_sync_at > 0 && (
-              <p className="text-xs text-zinc-500">
-                上次同步：{formatDate(syncSettings.last_sync_at)}
-              </p>
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs text-zinc-400">用户名</label>
+                  <input
+                    value={syncInput.username}
+                    onChange={(e) => setSyncInput((s) => ({ ...s, username: e.target.value }))}
+                    placeholder="username"
+                    autoComplete="username"
+                    className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none placeholder-zinc-600 focus:ring-1 focus:ring-zinc-600"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs text-zinc-400">密码</label>
+                  <input
+                    value={syncInput.password}
+                    onChange={(e) => setSyncInput((s) => ({ ...s, password: e.target.value }))}
+                    placeholder="password"
+                    type="password"
+                    autoComplete="current-password"
+                    onKeyDown={(e) => { if (e.key === "Enter") handleAuth(false); }}
+                    className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none placeholder-zinc-600 focus:ring-1 focus:ring-zinc-600"
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleAuth(false)}
+                    disabled={authLoading}
+                    className="flex-1 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                  >
+                    {authLoading ? "..." : "登录"}
+                  </button>
+                  <button
+                    onClick={() => handleAuth(true)}
+                    disabled={authLoading}
+                    className="flex-1 rounded-lg bg-zinc-700 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-600 disabled:opacity-50 transition-colors"
+                  >
+                    {authLoading ? "..." : "注册"}
+                  </button>
+                </div>
+              </>
             )}
+
             {syncStatus && (
               <p className="text-xs text-zinc-400 rounded bg-zinc-800 px-3 py-2">{syncStatus}</p>
             )}
           </div>
         )}
       </div>
+      {/* 冲突解决弹窗 */}
+      {conflicts.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="flex w-[800px] max-h-[78vh] flex-col rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl overflow-hidden">
+            {/* 标题栏 */}
+            <div className="shrink-0 border-b border-zinc-800 px-6 py-4">
+              <p className="text-sm font-semibold text-zinc-100">同步冲突</p>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                两台设备都修改了同一条笔记，请选择保留哪个版本
+                {conflicts.length > 1 && (
+                  <span className="ml-2 rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-400">
+                    {conflictIdx + 1} / {conflicts.length}
+                  </span>
+                )}
+              </p>
+            </div>
+
+            {/* 双栏对比 */}
+            <div className="flex flex-1 overflow-hidden min-h-0">
+              {/* 本机版本 */}
+              <div className="flex flex-1 flex-col overflow-hidden border-r border-zinc-800">
+                <div className="shrink-0 border-b border-zinc-800 bg-zinc-800/40 px-4 py-2.5">
+                  <p className="text-xs font-medium text-blue-400">本机版本</p>
+                  <p className="mt-0.5 text-xs text-zinc-500">{formatDate(conflicts[conflictIdx].mine.updated_at)}</p>
+                </div>
+                <div className="flex-1 overflow-y-auto px-5 py-4">
+                  <p className="mb-3 text-sm font-semibold text-zinc-100">
+                    {conflicts[conflictIdx].mine.title || "无标题"}
+                  </p>
+                  <div
+                    className="prose prose-invert prose-sm max-w-none text-zinc-300"
+                    dangerouslySetInnerHTML={{ __html: conflicts[conflictIdx].mine.content || "<p class='text-zinc-600'>空内容</p>" }}
+                  />
+                </div>
+              </div>
+
+              {/* 服务器版本 */}
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <div className="shrink-0 border-b border-zinc-800 bg-zinc-800/40 px-4 py-2.5">
+                  <p className="text-xs font-medium text-amber-400">服务器版本</p>
+                  <p className="mt-0.5 text-xs text-zinc-500">{formatDate(conflicts[conflictIdx].theirs.updated_at)}</p>
+                </div>
+                <div className="flex-1 overflow-y-auto px-5 py-4">
+                  <p className="mb-3 text-sm font-semibold text-zinc-100">
+                    {conflicts[conflictIdx].theirs.title || "无标题"}
+                  </p>
+                  <div
+                    className="prose prose-invert prose-sm max-w-none text-zinc-300"
+                    dangerouslySetInnerHTML={{ __html: conflicts[conflictIdx].theirs.content || "<p class='text-zinc-600'>空内容</p>" }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* 操作按钮 */}
+            <div className="shrink-0 flex gap-3 border-t border-zinc-800 px-6 py-4">
+              <button
+                onClick={() => handleResolve("mine")}
+                className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+              >
+                保留本机版本
+              </button>
+              <button
+                onClick={() => handleResolve("theirs")}
+                className="flex-1 rounded-lg bg-zinc-700 py-2 text-sm text-zinc-100 hover:bg-zinc-600 transition-colors"
+              >
+                保留服务器版本
+              </button>
+              <button
+                onClick={() => handleResolve("both")}
+                className="flex-1 rounded-lg bg-zinc-800 py-2 text-sm text-zinc-400 hover:bg-zinc-700 hover:text-zinc-100 transition-colors"
+              >
+                两个都保留
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

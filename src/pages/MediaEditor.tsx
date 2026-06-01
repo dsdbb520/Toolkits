@@ -3,10 +3,11 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Film, Music, Scissors, RefreshCw, FolderOpen,
   Loader2, CheckCircle2, AlertCircle, Upload, X,
-  Play, Pause, SkipBack,
+  Play, Pause, SkipBack, Save, FilePen,
 } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -511,10 +512,10 @@ export default function MediaEditor() {
                       {trimState === "processing"
                         ? <Loader2 size={12} className="animate-spin" />
                         : <Scissors size={12} />}
-                      裁剪并保存
+                      裁剪
                     </button>
                   </div>
-                  <OpResult state={trimState} result={trimResult} error={trimError} />
+                  <OpResult state={trimState} result={trimResult} error={trimError} originalPath={mediaInfo?.path} />
                 </div>
               </div>
 
@@ -542,7 +543,7 @@ export default function MediaEditor() {
                       提取
                     </button>
                   </div>
-                  <OpResult state={extractState} result={extractResult} error={extractError} />
+                  <OpResult state={extractState} result={extractResult} error={extractError} originalPath={mediaInfo?.path} />
                 </OpCard>
               )}
 
@@ -576,7 +577,7 @@ export default function MediaEditor() {
                     转换
                   </button>
                 </div>
-                <OpResult state={convertState} result={convertResult} error={convertError} />
+                <OpResult state={convertState} result={convertResult} error={convertError} originalPath={mediaInfo?.path} />
               </OpCard>
             </>
           )}
@@ -643,7 +644,29 @@ function OpCard({
   );
 }
 
-function OpResult({ state, result, error }: { state: ProcessState; result: string; error: string }) {
+function dirOf(p: string): string {
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return i > 0 ? p.substring(0, i) : ".";
+}
+
+function OpResult({ state, result, error, originalPath }: {
+  state: ProcessState; result: string; error: string; originalPath?: string;
+}) {
+  const [savingAs, setSavingAs] = useState(false);
+  const [overwriteDone, setOverwriteDone] = useState(false);
+  const baseName = result.split(/[\\/]/).pop() ?? "output";
+
+  const handleSaveAs = async () => {
+    setSavingAs(true);
+    try { await invoke("file_save_as", { src: result, defaultName: baseName }); } catch { /**/ }
+    setSavingAs(false);
+  };
+
+  const handleOverwrite = async () => {
+    if (!originalPath) return;
+    try { await invoke("file_overwrite", { src: result, dst: originalPath }); setOverwriteDone(true); } catch { /**/ }
+  };
+
   if (state === "idle") return null;
   if (state === "processing") return (
     <div className="flex items-center gap-2 text-xs text-zinc-400">
@@ -656,15 +679,29 @@ function OpResult({ state, result, error }: { state: ProcessState; result: strin
     </div>
   );
   return (
-    <div className="flex items-center gap-2">
-      <CheckCircle2 size={13} className="shrink-0 text-green-400" />
-      <span className="min-w-0 flex-1 truncate text-xs text-zinc-500" title={result}>{result}</span>
-      <button
-        onClick={() => openPath(result.substring(0, result.lastIndexOf("/")))}
-        className="shrink-0 flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-200 transition-colors"
-      >
-        <FolderOpen size={12} /> 打开
-      </button>
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <CheckCircle2 size={13} className="shrink-0 text-green-400" />
+        <span className="min-w-0 flex-1 truncate text-xs text-zinc-500" title={result}>{result}</span>
+      </div>
+      <div className="flex items-center gap-1">
+        <button onClick={handleSaveAs} disabled={savingAs}
+          className="flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-50 transition-colors">
+          {savingAs ? <Loader2 size={11} className="animate-spin" /> : <Save size={11} />}另存为…
+        </button>
+        {originalPath && (
+          <button onClick={handleOverwrite} disabled={overwriteDone}
+            className={cn("flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors",
+              overwriteDone ? "text-green-400" : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100")}>
+            {overwriteDone ? <CheckCircle2 size={11} /> : <FilePen size={11} />}
+            {overwriteDone ? "已覆盖" : "覆盖原文件"}
+          </button>
+        )}
+        <button onClick={() => openPath(dirOf(result))}
+          className="ml-auto flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors">
+          <FolderOpen size={12} /> 打开目录
+        </button>
+      </div>
     </div>
   );
 }

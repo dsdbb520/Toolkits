@@ -328,3 +328,28 @@ pub async fn image_convert(
     let (w, h, s) = save_image(&img, &out)?;
     Ok(ImageOpResult { output_path: out, output_size_bytes: s, width: w, height: h })
 }
+
+/// 弹出另存为对话框，将 src 文件复制到用户指定位置
+#[tauri::command]
+pub async fn file_save_as(src: String, default_name: String) -> Result<Option<String>, String> {
+    let dest = rfd::AsyncFileDialog::new()
+        .set_file_name(&default_name)
+        .save_file()
+        .await;
+    if let Some(handle) = dest {
+        let dest_path = handle.path().to_path_buf();
+        std::fs::copy(&src, &dest_path)
+            .map_err(|e| format!("保存失败: {}", e))?;
+        Ok(Some(dest_path.to_string_lossy().to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+/// 将 src 文件覆盖写入 dst（保存并覆盖原文件）
+#[tauri::command]
+pub fn file_overwrite(src: String, dst: String) -> Result<(), String> {
+    std::fs::copy(&src, &dst)
+        .map_err(|e| format!("覆盖原文件失败: {}", e))?;
+    Ok(())
+}

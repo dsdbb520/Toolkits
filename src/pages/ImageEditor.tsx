@@ -4,9 +4,11 @@ import {
   ArrowLeft, ImageIcon, Upload, X, Loader2, CheckCircle2,
   AlertCircle, FolderOpen, Crop, RotateCw, Maximize2, FileDown,
   RefreshCw, SlidersHorizontal, Scissors, ZoomIn, ZoomOut,
+  Save, FilePen,
 } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { cn } from "@/lib/utils";
 
 interface ImageInfo { path: string; filename: string; width: number; height: number; format: string; size_bytes: number }
 interface ImageOpResult { output_path: string; output_size_bytes: number; width: number; height: number }
@@ -16,6 +18,7 @@ const FORMATS = ["jpg","jpeg","png","webp","bmp","tiff"] as const;
 const COMPRESS_FORMATS = ["jpg","webp","png"] as const;
 const clamp = (v:number,lo:number,hi:number)=>Math.max(lo,Math.min(v,hi));
 function fmtSize(b:number){if(!b)return"—";if(b<1<<10)return`${b} B`;if(b<1<<20)return`${(b>>10).toFixed(0)} KB`;if(b<1<<30)return`${(b/(1<<20)).toFixed(1)} MB`;return`${(b/(1<<30)).toFixed(2)} GB`;}
+function dirOf(p:string){const i=Math.max(p.lastIndexOf("/"),p.lastIndexOf("\\"));return i>0?p.substring(0,i):"."}
 
 export default function ImageEditor(){
   const navigate=useNavigate();
@@ -116,7 +119,15 @@ export default function ImageEditor(){
     const ctx=canvas.getContext("2d")!;
     const cw=canvas.width,ch=canvas.height;
     ctx.clearRect(0,0,cw,ch);
-    ctx.drawImage(img,0,0,cw,ch);
+    if(rotation!==0&&!cropMode){
+      ctx.save();
+      ctx.translate(cw/2,ch/2);
+      ctx.rotate(rotation*Math.PI/180);
+      ctx.drawImage(img,-cw/2,-ch/2,cw,ch);
+      ctx.restore();
+    }else{
+      ctx.drawImage(img,0,0,cw,ch);
+    }
 
     if(cropMode&&cropRect.w>0&&cropRect.h>0){
       const s=displayScale;
@@ -144,7 +155,7 @@ export default function ImageEditor(){
       ctx.fillRect(rx,ly-14,lm.width+10,18);
       ctx.fillStyle="#fff";ctx.fillText(label,rx+5,ly);
     }
-  },[cropMode,cropRect,displayScale]);
+  },[cropMode,cropRect,displayScale,rotation]);
   useEffect(()=>{drawCanvas()},[drawCanvas]);
 
   // ─── Crop drag ───
@@ -268,7 +279,7 @@ export default function ImageEditor(){
                   <div className="flex-1"/>
                   <button onClick={()=>setCropMode(false)} className="rounded-lg px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-100 transition-colors">取消</button>
                   <button onClick={handleCrop} disabled={cropState==="processing"} className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors">
-                    {cropState==="processing"?<Loader2 size={14} className="animate-spin"/>:<Crop size={14}/>}裁剪并保存
+                    {cropState==="processing"?<Loader2 size={14} className="animate-spin"/>:<Crop size={14}/>}裁剪
                   </button>
                 </>
               )}
@@ -289,7 +300,7 @@ export default function ImageEditor(){
                   onPointerLeave={handleCanvasPointerUp}
                 />
               </div>
-              <OpResult state={cropState} result={cropRes?.output_path??""} error={cropError} info={cropRes?`${cropRes.width}×${cropRes.height}`:""}/>
+              <OpResult state={cropState} result={cropRes?.output_path??""} error={cropError} info={cropRes?`${cropRes.width}×${cropRes.height}`:""} originalPath={imgInfo?.path}/>
             </div>
 
             {/* ─── 其他编辑卡片 ─── */}
@@ -300,10 +311,10 @@ export default function ImageEditor(){
                   <span className="text-sm font-mono text-zinc-100 tabular-nums w-12 text-center">{rotation}°</span>
                   <button onClick={()=>setRotation(0)} className="text-xs text-zinc-500 hover:text-zinc-300">重置</button>
                   <button onClick={handleRotate} disabled={rotateState==="processing"||rotation===0} className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors ml-auto">
-                    {rotateState==="processing"?<Loader2 size={13} className="animate-spin"/>:<RotateCw size={13}/>}旋转并保存
+                    {rotateState==="processing"?<Loader2 size={13} className="animate-spin"/>:<RotateCw size={13}/>}旋转
                   </button>
                 </div>
-                <OpResult state={rotateState} result={rotateRes?.output_path??""} error={rotateError} info={rotateRes?`${rotateRes.width}×${rotateRes.height} — ${fmtSize(rotateRes.output_size_bytes)}`:""}/>
+                <OpResult state={rotateState} result={rotateRes?.output_path??""} error={rotateError} info={rotateRes?`${rotateRes.width}×${rotateRes.height} — ${fmtSize(rotateRes.output_size_bytes)}`:""} originalPath={imgInfo?.path}/>
               </OpCard>
 
               <OpCard icon={<Maximize2 size={14}/>} title="调整分辨率" desc="等比例缩放或拉伸">
@@ -313,10 +324,10 @@ export default function ImageEditor(){
                   <input type="number" value={resizeH||""} onChange={e=>{const v=Number(e.target.value)||0;setResizeH(v);if(keepRatio&&imgInfo&&v>0)setResizeW(Math.round(v*imgInfo.width/imgInfo.height))}} placeholder="高度" className="w-24 rounded border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 outline-none focus:border-blue-500"/>
                   <label className="flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer select-none"><input type="checkbox" checked={keepRatio} onChange={e=>setKeepRatio(e.target.checked)} className="accent-blue-500"/>等比例</label>
                   <button onClick={handleResize} disabled={resizeState==="processing"||resizeW<1||resizeH<1} className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors ml-auto">
-                    {resizeState==="processing"?<Loader2 size={13} className="animate-spin"/>:<Maximize2 size={13}/>}调整并保存
+                    {resizeState==="processing"?<Loader2 size={13} className="animate-spin"/>:<Maximize2 size={13}/>}调整分辨率
                   </button>
                 </div>
-                <OpResult state={resizeState} result={resizeRes?.output_path??""} error={resizeError} info={resizeRes?`${resizeRes.width}×${resizeRes.height} — ${fmtSize(resizeRes.output_size_bytes)}`:""}/>
+                <OpResult state={resizeState} result={resizeRes?.output_path??""} error={resizeError} info={resizeRes?`${resizeRes.width}×${resizeRes.height} — ${fmtSize(resizeRes.output_size_bytes)}`:""} originalPath={imgInfo?.path}/>
               </OpCard>
 
               <OpCard icon={<SlidersHorizontal size={14}/>} title="压缩体积" desc="调整画质或转换格式以减小文件大小">
@@ -326,11 +337,10 @@ export default function ImageEditor(){
                   <input type="range" min={1} max={100} value={quality} onChange={e=>setQuality(Number(e.target.value))} className="w-32 accent-blue-500"/>
                   <span className="text-sm font-mono text-zinc-100 tabular-nums w-8">{quality}</span>
                   <button onClick={handleCompress} disabled={compressState==="processing"} className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors ml-auto">
-                    {compressState==="processing"?<Loader2 size={13} className="animate-spin"/>:<FileDown size={13}/>}压缩并保存
+                    {compressState==="processing"?<Loader2 size={13} className="animate-spin"/>:<FileDown size={13}/>}压缩
                   </button>
                 </div>
-                {compressRes&&<div className="text-xs text-zinc-500 mt-1">压缩后 {fmtSize(compressRes.output_size_bytes)}{imgInfo&&compressRes.output_size_bytes<imgInfo.size_bytes?` — 减少 ${Math.round((1-compressRes.output_size_bytes/imgInfo.size_bytes)*100)}%`:""}</div>}
-                <OpResult state={compressState} result={compressRes?.output_path??""} error={compressError}/>
+                <OpResult state={compressState} result={compressRes?.output_path??""} error={compressError} info={compressRes?`${fmtSize(compressRes.output_size_bytes)}${imgInfo&&compressRes.output_size_bytes<imgInfo.size_bytes?` — 减少${Math.round((1-compressRes.output_size_bytes/imgInfo.size_bytes)*100)}%`:""}`:""} originalPath={imgInfo?.path}/>
               </OpCard>
 
               <OpCard icon={<RefreshCw size={14}/>} title="格式转换" desc="将图片转换为其他格式">
@@ -340,7 +350,7 @@ export default function ImageEditor(){
                     {convertState==="processing"?<Loader2 size={13} className="animate-spin"/>:<RefreshCw size={13}/>}转换
                   </button>
                 </div>
-                <OpResult state={convertState} result={convertRes?.output_path??""} error={convertError} info={convertRes?`${convertRes.width}×${convertRes.height} — ${fmtSize(convertRes.output_size_bytes)}`:""}/>
+                <OpResult state={convertState} result={convertRes?.output_path??""} error={convertError} info={convertRes?`${convertRes.width}×${convertRes.height} — ${fmtSize(convertRes.output_size_bytes)}`:""} originalPath={imgInfo?.path}/>
               </OpCard>
             </div>
           </>)}
@@ -352,10 +362,36 @@ export default function ImageEditor(){
 
 function InfoRow({label,value}:{label:string;value:string}){return <div className="flex justify-between gap-2 text-xs"><span className="text-zinc-600">{label}</span><span className="text-zinc-400">{value}</span></div>}
 function OpCard({icon,title,desc,children}:{icon:React.ReactNode;title:string;desc:string;children:React.ReactNode}){return <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5 flex flex-col gap-4"><div className="flex items-center gap-2"><span className="text-blue-400">{icon}</span><span className="text-sm font-medium text-zinc-100">{title}</span><span className="text-xs text-zinc-500">{desc}</span></div>{children}</div>}
-function OpResult({state,result,error,info}:{state:ProcessState;result:string;error:string;info?:string}){
+function OpResult({state,result,error,info,originalPath}:{state:ProcessState;result:string;error:string;info?:string;originalPath?:string}){
+  const [savingAs,setSavingAs]=useState(false);
+  const [overwriteDone,setOverwriteDone]=useState(false);
+  const baseName=result.split(/[\\/]/).pop()??"output";
+  const handleSaveAs=async()=>{setSavingAs(true);try{await invoke("file_save_as",{src:result,defaultName:baseName})}catch{/**/}setSavingAs(false)};
+  const handleOverwrite=async()=>{if(!originalPath)return;try{await invoke("file_overwrite",{src:result,dst:originalPath});setOverwriteDone(true)}catch{/**/}};
   if(state==="idle")return null;
   if(state==="processing")return <div className="flex items-center gap-2 text-xs text-zinc-400 px-4 pb-3"><Loader2 size={12} className="animate-spin"/>处理中，请稍候…</div>;
   if(state==="error")return <div className="flex items-start gap-2 text-xs text-red-400 px-4 pb-3"><AlertCircle size={12} className="mt-0.5 shrink-0"/>{error}</div>;
-  if(state==="done"&&result)return <div className="flex items-center gap-2 border-t border-zinc-800 px-4 py-3"><CheckCircle2 size={13} className="shrink-0 text-green-400"/><span className="min-w-0 flex-1 truncate text-xs text-zinc-500" title={result}>{result}</span>{info&&<span className="text-xs text-zinc-600">{info}</span>}<button onClick={()=>openPath(result.substring(0,result.lastIndexOf("/")))} className="shrink-0 flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-200 transition-colors"><FolderOpen size={12}/>打开</button></div>;
+  if(state==="done"&&result)return(
+    <div className="flex flex-col gap-1 border-t border-zinc-800 px-4 py-3">
+      <div className="flex items-center gap-2">
+        <CheckCircle2 size={12} className="shrink-0 text-green-400"/>
+        <span className="min-w-0 flex-1 truncate text-xs text-zinc-500" title={result}>{result}</span>
+        {info&&<span className="shrink-0 text-xs text-zinc-600">{info}</span>}
+      </div>
+      <div className="flex items-center gap-1">
+        <button onClick={handleSaveAs} disabled={savingAs} className="flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-50 transition-colors">
+          {savingAs?<Loader2 size={11} className="animate-spin"/>:<Save size={11}/>}另存为…
+        </button>
+        {originalPath&&(
+          <button onClick={handleOverwrite} disabled={overwriteDone} className={cn("flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors",overwriteDone?"text-green-400":"text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100")}>
+            {overwriteDone?<CheckCircle2 size={11}/>:<FilePen size={11}/>}{overwriteDone?"已覆盖":"覆盖原文件"}
+          </button>
+        )}
+        <button onClick={()=>openPath(dirOf(result))} className="ml-auto flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors">
+          <FolderOpen size={11}/>打开目录
+        </button>
+      </div>
+    </div>
+  );
   return null;
 }

@@ -368,6 +368,24 @@ mod win {
             .map(|_| ())
             .map_err(|e| format!("启动 Steam 失败: {}", e))
     }
+
+    /// 以 `-login username password` 参数启动 Steam，用于首次添加账号。
+    /// 通过 `cmd /c start` 间接启动，避免 WaitForInputIdle 阻塞。
+    pub fn launch_with_login(exe: &std::path::Path, username: &str, password: &str) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // cmd /c start 与 explorer 类似，以独立进程组启动目标程序，不继承 Job
+        let exe_str = exe.to_string_lossy();
+        std::process::Command::new("cmd")
+            .args([
+                "/c", "start", "/b", "",
+                &exe_str, "-login", username, password,
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("启动 Steam 失败: {}", e))
+    }
 }
 
 fn is_steam_running() -> bool {
@@ -530,6 +548,23 @@ pub fn steam_get_userdata_path(steamid32: String) -> Result<String, String> {
     } else {
         Err("未找到 userdata 文件夹".to_string())
     }
+}
+
+/// 以指定账号密码启动 Steam，首次登录后 Steam 自动保存凭据（RememberPassword=1）
+#[tauri::command]
+pub async fn steam_add_account(username: String, password: String) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Err("此功能仅支持 Windows".to_string());
+    }
+    let steam_path = steam_install_path().ok_or("未找到 Steam 安装路径")?;
+    let steam_exe = steam_exe_path(&steam_path);
+
+    #[cfg(windows)]
+    {
+        win::kill_and_wait(3000);
+        win::launch_with_login(&steam_exe, &username, &password)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

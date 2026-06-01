@@ -157,6 +157,44 @@ pub fn get_changes_since(conn: &Connection, since: i64) -> Result<Vec<Note>> {
     result
 }
 
+/// 强制覆盖本地笔记，不校验时间戳（用于冲突解决"保留服务器版本"）
+pub fn force_apply_note(conn: &Connection, note: &Note) -> Result<()> {
+    conn.execute(
+        "INSERT INTO notes(id, title, content, is_note, deleted, created_at, updated_at)
+         VALUES(?1,?2,?3,?4,?5,?6,?7)
+         ON CONFLICT(id) DO UPDATE SET
+           title=excluded.title, content=excluded.content,
+           is_note=excluded.is_note, deleted=excluded.deleted,
+           updated_at=excluded.updated_at",
+        params![
+            note.id, note.title, note.content,
+            note.is_note as i64, note.deleted as i64,
+            note.created_at, note.updated_at
+        ],
+    )?;
+    Ok(())
+}
+
+/// 用指定内容创建新笔记（用于冲突解决"两个都保留"）
+pub fn create_with_content(conn: &Connection, title: &str, content: &str) -> Result<Note> {
+    let now = now_ms();
+    let note = Note {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: title.to_string(),
+        content: content.to_string(),
+        is_note: false,
+        deleted: false,
+        created_at: now,
+        updated_at: now,
+    };
+    conn.execute(
+        "INSERT INTO notes (id, title, content, is_note, deleted, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![note.id, note.title, note.content, 0i64, 0i64, note.created_at, note.updated_at],
+    )?;
+    Ok(note)
+}
+
 /// 将服务端返回的笔记合并到本地（last-write-wins by updated_at）
 pub fn apply_remote_notes(conn: &Connection, remote: &[Note]) -> Result<()> {
     for note in remote {
