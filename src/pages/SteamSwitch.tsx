@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Gamepad2, RefreshCw, Copy, Check, Folder,
   LogIn, Loader2, AlertCircle, Star, User as UserIcon, Play,
-  UserPlus, Eye, EyeOff,
+  UserPlus, Eye, EyeOff, MonitorX,
 } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -177,8 +177,32 @@ function CopyField({ label, value }: { label: string; value: string }) {
 
 // ─── Component ────────────────────────────────────────────────
 
+const isMac = navigator.userAgent.includes("Mac OS");
+
 export default function SteamSwitch() {
   const navigate = useNavigate();
+
+  if (isMac) {
+    return (
+      <div className="flex h-full flex-col">
+        <header className="flex items-center gap-3 border-b border-zinc-800 px-4 py-3">
+          <button
+            onClick={() => navigate("/toolbox")}
+            className="flex items-center gap-1.5 text-sm text-zinc-400 transition-colors hover:text-zinc-100"
+          >
+            <ArrowLeft size={15} /> 工具箱
+          </button>
+          <span className="text-zinc-600">/</span>
+          <span className="text-sm text-zinc-100">Steam 切换</span>
+        </header>
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-zinc-500">
+          <MonitorX size={40} />
+          <p className="text-sm font-medium text-zinc-300">此功能仅支持 Windows</p>
+          <p className="text-xs text-zinc-600">Steam 账号切换依赖 Windows 注册表，无法在 macOS 上运行</p>
+        </div>
+      </div>
+    );
+  }
   const [accounts, setAccounts] = useState<SteamAccount[]>([]);
   const [steamPath, setSteamPath] = useState("");
   const [loading, setLoading] = useState(true);
