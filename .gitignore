@@ -14,6 +14,7 @@ dist-ssr
 
 # Documentation (managed in separate private repo)
 *.md
+!README.md
 .ai-context/
 
 sync-server/target/
