@@ -11,7 +11,7 @@
 | 媒体编辑 | Win / Mac | 视频裁剪、提取音频、格式转换，依赖本地 ffmpeg |
 | 图片编辑 | Win / Mac | 裁剪、旋转、压缩、格式转换，纯本地处理 |
 | Steam 区域价格 | Win / Mac | 搜索游戏，对比各区售价与锁区情况 |
-| TG 下载 | Win / Mac | 通过 MTProto API 批量下载 Telegram 对话中的图片和视频 |
+| 心愿单 · 降价追踪 | Win / Mac | 粘贴 Steam/PS/NS 商店链接追踪价格，自记录历史曲线、史低与目标价提醒 |
 | Steam 账号切换 | **仅 Windows** | 快速切换 Steam 登录账号，依赖 Windows 注册表 |
 | 截图标注 | — | 开发中 |
 

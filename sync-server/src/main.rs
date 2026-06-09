@@ -76,6 +76,64 @@ struct SyncResp {
     synced_at: i64,
 }
 
+// ─── 心愿单同步 ────────────────────────────────────────────
+// 客户端取价（用其代理），上传条目元数据 + 当前价格快照；服务端按用户存储、做 LWW 合并、
+// 记录价格历史、计算史低，并把跨设备变更回传。降价判断在客户端（新价 < 旧价）。
+
+#[derive(Serialize, Deserialize, Clone)]
+struct WItem {
+    id: String,
+    #[serde(default)]
+    platform: String,
+    #[serde(default)]
+    region: String,
+    #[serde(default)]
+    product_key: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    image: Option<String>,
+    #[serde(default)]
+    store_url: Option<String>,
+    #[serde(default)]
+    target_cny: Option<f64>,
+    #[serde(default)]
+    created_at: i64,
+    updated_at: i64,
+    #[serde(default)]
+    deleted: bool,
+    // 价格快照
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    currency: Option<String>,
+    #[serde(default)]
+    final_formatted: Option<String>,
+    #[serde(default)]
+    initial_formatted: Option<String>,
+    #[serde(default)]
+    discount_percent: i64,
+    #[serde(default)]
+    final_cny: Option<f64>,
+    #[serde(default)]
+    checked_at: i64,
+    // 服务端计算回传：史低
+    #[serde(default)]
+    low_cny: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct WishSyncReq {
+    last_sync_at: i64,
+    items: Vec<WItem>,
+}
+
+#[derive(Serialize)]
+struct WishSyncResp {
+    items: Vec<WItem>,
+    synced_at: i64,
+}
+
 // 通过 axum Extension 在中间件和处理函数之间传递已认证的用户名
 #[derive(Clone)]
 struct AuthUser(String);
@@ -99,6 +157,42 @@ fn init_db(conn: &Connection) {
         );",
     )
     .expect("failed to init users table");
+
+    // 心愿单（按用户）：跨设备同步 + 服务端价格历史
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS wishlist_items (
+            user_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            platform TEXT NOT NULL DEFAULT '',
+            region TEXT NOT NULL DEFAULT '',
+            product_key TEXT NOT NULL DEFAULT '',
+            title TEXT,
+            image TEXT,
+            store_url TEXT,
+            target_cny REAL,
+            created_at INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL DEFAULT 0,
+            deleted INTEGER NOT NULL DEFAULT 0,
+            last_status TEXT,
+            last_currency TEXT,
+            last_final_formatted TEXT,
+            last_initial_formatted TEXT,
+            last_discount INTEGER,
+            last_final_cny REAL,
+            last_checked_at INTEGER,
+            PRIMARY KEY (user_id, id)
+        );
+        CREATE TABLE IF NOT EXISTS wishlist_history (
+            user_id TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            checked_at INTEGER NOT NULL,
+            status TEXT,
+            final_cny REAL,
+            discount_percent INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_wh_user_item ON wishlist_history(user_id, item_id);",
+    )
+    .expect("failed to init wishlist tables");
 
     // 检查 notes 表是否已有 user_id 列
     let has_user_id: bool = conn
@@ -361,6 +455,126 @@ async fn sync(
     Json(SyncResp { notes, conflicts, synced_at })
 }
 
+fn wishlist_low(db: &Connection, user_id: &str, item_id: &str) -> Option<f64> {
+    db.query_row(
+        "SELECT MIN(final_cny) FROM wishlist_history
+         WHERE user_id=?1 AND item_id=?2 AND final_cny IS NOT NULL
+           AND status IN ('ok','free')",
+        params![user_id, item_id],
+        |r| r.get::<_, Option<f64>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+async fn wishlist_sync(
+    State(state): State<AppState>,
+    Extension(AuthUser(user_id)): Extension<AuthUser>,
+    Json(req): Json<WishSyncReq>,
+) -> impl IntoResponse {
+    let db = state.db.lock().unwrap();
+    let synced_at = now_ms();
+
+    for it in &req.items {
+        // 元数据 LWW 合并
+        let srv_updated: Option<i64> = db
+            .query_row(
+                "SELECT updated_at FROM wishlist_items WHERE user_id=?1 AND id=?2",
+                params![user_id, it.id],
+                |r| r.get(0),
+            )
+            .ok();
+        if srv_updated.map_or(true, |su| it.updated_at > su) {
+            db.execute(
+                "INSERT INTO wishlist_items
+                    (user_id,id,platform,region,product_key,title,image,store_url,target_cny,created_at,updated_at,deleted)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+                 ON CONFLICT(user_id,id) DO UPDATE SET
+                    platform=excluded.platform, region=excluded.region, product_key=excluded.product_key,
+                    title=excluded.title, image=excluded.image, store_url=excluded.store_url,
+                    target_cny=excluded.target_cny, updated_at=excluded.updated_at, deleted=excluded.deleted",
+                params![
+                    user_id, it.id, it.platform, it.region, it.product_key, it.title, it.image,
+                    it.store_url, it.target_cny, it.created_at, it.updated_at, it.deleted as i64
+                ],
+            )
+            .ok();
+        }
+
+        // 价格快照：仅当更新（checked_at 更晚）时记录历史并刷新最新价；同时 bump updated_at 以便跨设备传播
+        if it.status.is_some() {
+            let srv_checked: Option<i64> = db
+                .query_row(
+                    "SELECT last_checked_at FROM wishlist_items WHERE user_id=?1 AND id=?2",
+                    params![user_id, it.id],
+                    |r| r.get::<_, Option<i64>>(0),
+                )
+                .ok()
+                .flatten();
+            if it.checked_at > srv_checked.unwrap_or(0) {
+                db.execute(
+                    "UPDATE wishlist_items SET last_status=?3, last_currency=?4, last_final_formatted=?5,
+                        last_initial_formatted=?6, last_discount=?7, last_final_cny=?8, last_checked_at=?9,
+                        updated_at=MAX(updated_at, ?10)
+                     WHERE user_id=?1 AND id=?2",
+                    params![
+                        user_id, it.id, it.status, it.currency, it.final_formatted,
+                        it.initial_formatted, it.discount_percent, it.final_cny, it.checked_at, synced_at
+                    ],
+                )
+                .ok();
+                db.execute(
+                    "INSERT INTO wishlist_history (user_id,item_id,checked_at,status,final_cny,discount_percent)
+                     VALUES (?1,?2,?3,?4,?5,?6)",
+                    params![user_id, it.id, it.checked_at, it.status, it.final_cny, it.discount_percent],
+                )
+                .ok();
+            }
+        }
+    }
+
+    // 回传：该用户在 last_sync_at 之后变更的所有条目（含 deleted，供其它设备同步删除）
+    let mut stmt = db
+        .prepare(
+            "SELECT id,platform,region,product_key,title,image,store_url,target_cny,created_at,updated_at,deleted,
+                    last_status,last_currency,last_final_formatted,last_initial_formatted,last_discount,last_final_cny,last_checked_at
+             FROM wishlist_items WHERE user_id=?1 AND updated_at > ?2",
+        )
+        .unwrap();
+    let mut items: Vec<WItem> = stmt
+        .query_map(params![user_id, req.last_sync_at], |row| {
+            Ok(WItem {
+                id: row.get(0)?,
+                platform: row.get(1)?,
+                region: row.get(2)?,
+                product_key: row.get(3)?,
+                title: row.get(4)?,
+                image: row.get(5)?,
+                store_url: row.get(6)?,
+                target_cny: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+                deleted: row.get::<_, i64>(10)? != 0,
+                status: row.get(11)?,
+                currency: row.get(12)?,
+                final_formatted: row.get(13)?,
+                initial_formatted: row.get(14)?,
+                discount_percent: row.get::<_, Option<i64>>(15)?.unwrap_or(0),
+                final_cny: row.get(16)?,
+                checked_at: row.get::<_, Option<i64>>(17)?.unwrap_or(0),
+                low_cny: None,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    for it in &mut items {
+        it.low_cny = wishlist_low(&db, &user_id, &it.id);
+    }
+
+    Json(WishSyncResp { items, synced_at })
+}
+
 // ─── 主入口 ────────────────────────────────────────────────
 
 #[tokio::main]
@@ -398,6 +612,7 @@ async fn main() {
 
     let protected = Router::new()
         .route("/sync", post(sync))
+        .route("/wishlist/sync", post(wishlist_sync))
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
 
     let app = Router::new()

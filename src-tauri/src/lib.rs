@@ -2,17 +2,17 @@ mod bili;
 mod media;
 mod image_editor;
 mod notes;
+mod pricing;
 mod steam;
 mod steam_price;
-mod telegram;
+mod wishlist;
 
 use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use tauri::Manager;
 
 pub struct AppState {
     pub db: Mutex<Connection>,
-    pub tg: telegram::TgState,
 }
 
 #[tauri::command]
@@ -257,14 +257,13 @@ pub fn run() {
             let conn = Connection::open(data_dir.join("notes.db"))
                 .expect("failed to open database");
             notes::init_db(&conn).expect("failed to init database");
+            wishlist::init_db(&conn).expect("failed to init wishlist tables");
             // 初始化 Steam 价格查询的代理设置（从数据库读取，默认跟随系统代理）
             let proxy_mode =
                 notes::get_setting(&conn, "steam_proxy_mode").unwrap_or_else(|| "system".to_string());
             let proxy_url = notes::get_setting(&conn, "steam_proxy_url").unwrap_or_default();
-            steam_price::apply_proxy(&proxy_mode, &proxy_url);
-            let tg = Arc::new(tokio::sync::Mutex::new(telegram::TgRuntimeState::new()));
-            app.manage(tg.clone()); // 让 tauri::State<'_, TgState> 注入可用
-            app.manage(AppState { db: Mutex::new(conn), tg });
+            pricing::apply_proxy(&proxy_mode, &proxy_url);
+            app.manage(AppState { db: Mutex::new(conn) });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -313,20 +312,15 @@ pub fn run() {
             steam_price::steam_price_query,
             steam_price::steam_price_get_proxy,
             steam_price::steam_price_set_proxy,
-            telegram::tg_get_settings,
-            telegram::tg_save_settings,
-            telegram::tg_is_authenticated,
-            telegram::tg_request_code,
-            telegram::tg_sign_in,
-            telegram::tg_sign_out,
-            telegram::tg_get_dialogs,
-            telegram::tg_download_media,
-            telegram::tg_scan_cache,
-            telegram::tg_pick_dir,
-            telegram::tg_get_suggested_paths,
-            telegram::tg_get_watch_dirs,
-            telegram::tg_watch_start,
-            telegram::tg_watch_stop,
+            wishlist::wishlist_add,
+            wishlist::wishlist_list,
+            wishlist::wishlist_remove,
+            wishlist::wishlist_set_target,
+            wishlist::wishlist_set_title,
+            wishlist::wishlist_refresh,
+            wishlist::wishlist_sync,
+            wishlist::wishlist_unseen_count,
+            wishlist::wishlist_mark_seen,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

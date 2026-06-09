@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Gamepad2, RefreshCw, Copy, Check, Folder,
   LogIn, Loader2, AlertCircle, Star, User as UserIcon, Play,
-  UserPlus, Eye, EyeOff, MonitorX,
+  UserPlus,
 } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -31,122 +31,6 @@ function fmtDate(secs: number): string {
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit",
   });
-}
-
-// ─── 添加账号对话框 ────────────────────────────────────────────
-
-function AddAccountDialog({
-  onClose,
-  onSuccess,
-}: {
-  onClose: () => void;
-  onSuccess: () => void;
-}) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPwd, setShowPwd] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [err, setErr] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => { inputRef.current?.focus(); }, []);
-
-  const handleAdd = async () => {
-    if (!username.trim() || !password) return;
-    setAdding(true);
-    setErr("");
-    try {
-      await invoke("steam_add_account", { username: username.trim(), password });
-      onSuccess();
-      onClose();
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setAdding(false);
-    }
-  };
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div className="w-80 rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl">
-        <h2 className="mb-4 flex items-center gap-2 text-base font-semibold text-zinc-100">
-          <UserPlus size={16} className="text-blue-400" /> 添加新账号
-        </h2>
-
-        {err && (
-          <div className="mb-3 flex items-start gap-2 rounded-lg border border-red-800 bg-red-950/50 px-3 py-2 text-xs text-red-400">
-            <AlertCircle size={13} className="mt-0.5 shrink-0" />
-            <span>{err}</span>
-          </div>
-        )}
-
-        <div className="flex flex-col gap-3">
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">账号名</label>
-            <input
-              ref={inputRef}
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Steam 登录名"
-              autoComplete="username"
-              onKeyDown={(e) => e.key === "Enter" && inputRef.current?.blur()}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-blue-500"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">密码</label>
-            <div className="relative">
-              <input
-                type={showPwd ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Steam 密码"
-                autoComplete="current-password"
-                onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 pr-9 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-blue-500"
-              />
-              <button
-                type="button"
-                tabIndex={-1}
-                onClick={() => setShowPwd((v) => !v)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
-              >
-                {showPwd ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
-            </div>
-          </div>
-          <p className="text-xs text-zinc-600">
-            Steam 将在首次登录后自动记住此账号，之后可从列表一键切换，无需再次输入密码。
-          </p>
-        </div>
-
-        <div className="mt-4 flex gap-2">
-          <button
-            onClick={onClose}
-            disabled={adding}
-            className="flex-1 rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100 disabled:opacity-50"
-          >
-            取消
-          </button>
-          <button
-            onClick={handleAdd}
-            disabled={adding || !username.trim() || !password}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {adding ? (
-              <><Loader2 size={14} className="animate-spin" /> 登录中…</>
-            ) : (
-              <><LogIn size={14} /> 登录</>
-            )}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 // ─── 可复制的字段 ──────────────────────────────────────────────
@@ -196,7 +80,7 @@ export default function SteamSwitch() {
           <span className="text-sm text-zinc-100">Steam 切换</span>
         </header>
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-zinc-500">
-          <MonitorX size={40} />
+          <Gamepad2 size={40} />
           <p className="text-sm font-medium text-zinc-300">此功能仅支持 Windows</p>
           <p className="text-xs text-zinc-600">Steam 账号切换依赖 Windows 注册表，无法在 macOS 上运行</p>
         </div>
@@ -209,7 +93,7 @@ export default function SteamSwitch() {
   const [error, setError] = useState("");
   const [switching, setSwitching] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
-  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [addingAccount, setAddingAccount] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -261,6 +145,19 @@ export default function SteamSwitch() {
     }
   };
 
+  const handleAddAccount = async () => {
+    setAddingAccount(true);
+    setError("");
+    try {
+      await invoke("steam_add_account");
+      setNotice("Steam 正在启动，请在 Steam 中登录新账号，完成后点击刷新…");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setAddingAccount(false);
+    }
+  };
+
   const handleOpenUserdata = async (acc: SteamAccount) => {
     try {
       const path = await invoke<string>("steam_get_userdata_path", { steamid32: acc.steamid32 });
@@ -286,11 +183,12 @@ export default function SteamSwitch() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowAddDialog(true)}
-            disabled={loading}
+            onClick={handleAddAccount}
+            disabled={addingAccount || loading}
             className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-50"
           >
-            <UserPlus size={15} /> 添加账号
+            {addingAccount ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />}
+            添加账号
           </button>
           <button
             onClick={load}
@@ -424,15 +322,6 @@ export default function SteamSwitch() {
         )}
       </div>
 
-      {showAddDialog && (
-        <AddAccountDialog
-          onClose={() => setShowAddDialog(false)}
-          onSuccess={() => {
-            setNotice("Steam 正在以新账号启动，请在 Steam 中完成登录后返回刷新列表…");
-            setTimeout(load, 10000);
-          }}
-        />
-      )}
     </div>
   );
 }
