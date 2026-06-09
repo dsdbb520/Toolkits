@@ -7,13 +7,29 @@ import { Underline } from "@tiptap/extension-underline";
 import { TextStyle } from "@tiptap/extension-text-style";
 import { Color } from "@tiptap/extension-color";
 import { Highlight } from "@tiptap/extension-highlight";
+import { LineHeight, AnchorLink } from "@/lib/notesExtensions";
 import {
   ArrowLeft, Plus, Trash2, Search, FileText,
   Bold, Italic, Underline as UnderlineIcon,
   Heading1, Heading2, Heading3, List, ListOrdered,
   BookOpen, FileEdit, Pencil, RefreshCw, Settings2, X,
+  StretchVertical, Link2, Unlink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+// 行距预设（写进段落 line-height）。范围拉大、档位加密，区别更明显
+const LINE_HEIGHTS = [
+  { label: "默认", value: null as string | null },
+  { label: "1.0 紧凑", value: "1.0" },
+  { label: "1.25", value: "1.25" },
+  { label: "1.5", value: "1.5" },
+  { label: "1.75 正常", value: "1.75" },
+  { label: "2.0", value: "2.0" },
+  { label: "2.5", value: "2.5" },
+  { label: "3.0 宽松", value: "3.0" },
+  { label: "4.0", value: "4.0" },
+  { label: "5.0 超宽", value: "5.0" },
+];
 
 interface Note {
   id: string;
@@ -85,6 +101,8 @@ export default function Notes() {
   const [title, setTitle] = useState("");
   const [search, setSearch] = useState("");
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [showLineHeight, setShowLineHeight] = useState(false);
+  const [pendingAnchor, setPendingAnchor] = useState<string | null>(null); // 锚点绑定：已选第一行待选第二行
   const [isEditing, setIsEditing] = useState(false);
   const [showSyncPanel, setShowSyncPanel] = useState(false);
   const [syncSettings, setSyncSettings] = useState<SyncSettings>({ server_url: "", token: "", last_sync_at: 0, username: "" });
@@ -115,6 +133,8 @@ export default function Notes() {
       TextStyle,
       Color,
       Highlight.configure({ multicolor: true }),
+      LineHeight,
+      AnchorLink,
     ],
     content: "",
     editorProps: {
@@ -137,6 +157,51 @@ export default function Notes() {
       }, 600);
     },
   });
+
+  // ── 两行互跳锚点 ──
+  const onAnchorClick = () => {
+    if (!editor) return;
+    const cur =
+      editor.getAttributes("paragraph").anchorPair ||
+      editor.getAttributes("heading").anchorPair ||
+      null;
+    if (pendingAnchor) {
+      editor.chain().focus().setBlockAnchor(pendingAnchor).run(); // 完成绑定第二行
+      setPendingAnchor(null);
+    } else if (cur) {
+      editor.chain().focus().clearAnchorById(cur).run(); // 在已绑定行上点 = 解除该对
+    } else {
+      const id = "a" + Math.random().toString(36).slice(2, 9);
+      editor.chain().focus().setBlockAnchor(id).run(); // 标记第一行，等待选第二行
+      setPendingAnchor(id);
+    }
+  };
+
+  const jumpToPartner = (el: Element, container: Element) => {
+    const pair = el.getAttribute("data-anchor-pair");
+    if (!pair) return;
+    for (const p of Array.from(container.querySelectorAll(`[data-anchor-pair="${pair}"]`))) {
+      if (p !== el) {
+        p.scrollIntoView({ behavior: "smooth", block: "center" });
+        p.classList.add("anchor-flash");
+        setTimeout(() => p.classList.remove("anchor-flash"), 1200);
+        break;
+      }
+    }
+  };
+
+  // 只读：左键直接跳；编辑：Ctrl/⌘+左键跳（普通左键仍用于放光标编辑）
+  const onContentClick = (e: React.MouseEvent, requireMod: boolean) => {
+    if (requireMod && !(e.ctrlKey || e.metaKey)) return;
+    const el = (e.target as HTMLElement).closest("[data-anchor-pair]");
+    if (el) {
+      e.preventDefault();
+      jumpToPartner(el, e.currentTarget as Element);
+    }
+  };
+
+  // 切换笔记时清掉「待绑定」状态
+  useEffect(() => { setPendingAnchor(null); }, [selectedId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -509,6 +574,51 @@ export default function Notes() {
                       </div>
                     )}
                   </div>
+                  <div className="mx-1.5 h-4 w-px bg-zinc-700" />
+                  {/* 行距 */}
+                  <div className="relative">
+                    <button
+                      onMouseDown={(e) => { e.preventDefault(); setShowLineHeight((v) => !v); }}
+                      title="行距"
+                      className="flex h-7 items-center gap-1 rounded px-2 text-xs text-zinc-400 hover:bg-zinc-700 hover:text-zinc-100 transition-colors"
+                    >
+                      <StretchVertical size={14} /><span>行距</span>
+                    </button>
+                    {showLineHeight && (
+                      <div className="absolute left-0 top-full z-50 mt-1 flex max-h-72 flex-col overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
+                        {LINE_HEIGHTS.map(({ label, value }) => (
+                          <button
+                            key={label}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              editor?.chain().focus().setNoteLineHeight(value).run();
+                              setShowLineHeight(false);
+                            }}
+                            className="rounded px-4 py-1 text-left text-xs text-zinc-300 hover:bg-zinc-700"
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {/* 两行互跳锚点 */}
+                  <ToolbarBtn
+                    active={
+                      !!pendingAnchor ||
+                      !!(editor?.getAttributes("paragraph").anchorPair || editor?.getAttributes("heading").anchorPair)
+                    }
+                    onClick={onAnchorClick}
+                    title={
+                      pendingAnchor
+                        ? "已选第一行，把光标移到第二行再点一次完成绑定"
+                        : "两行互跳：选第一行点此，再到第二行点一次（在已绑定行点击=解除）"
+                    }
+                  >
+                    {(editor?.getAttributes("paragraph").anchorPair || editor?.getAttributes("heading").anchorPair) && !pendingAnchor
+                      ? <Unlink size={14} />
+                      : <Link2 size={14} />}
+                  </ToolbarBtn>
                 </>
               ) : (
                 /* 只读模式操作栏 */
@@ -561,12 +671,26 @@ export default function Notes() {
               </div>
             </div>
 
+            {/* 锚点绑定提示 */}
+            {isEditing && pendingAnchor && (
+              <div className="flex items-center gap-2 border-b border-blue-900/40 bg-blue-950/30 px-8 py-1.5 text-xs text-blue-300">
+                <Link2 size={12} />
+                已选第一行，把光标移到要互跳的第二行，再点一次链接按钮完成绑定
+                <button onClick={() => setPendingAnchor(null)} className="ml-1 text-blue-400 underline hover:text-blue-300">取消</button>
+              </div>
+            )}
+
             {/* 内容区：只读用 prose 渲染，编辑用 TipTap */}
             <div className="flex-1 overflow-y-auto">
               {isEditing ? (
-                <EditorContent editor={editor} className="h-full" />
+                <div className="h-full" onClick={(e) => onContentClick(e, true)}>
+                  <EditorContent editor={editor} className="h-full" />
+                </div>
               ) : (
-                <div className="prose prose-invert prose-base max-w-none px-8 py-6 leading-relaxed">
+                <div
+                  className="prose prose-invert prose-base max-w-none px-8 py-6 leading-relaxed"
+                  onClick={(e) => onContentClick(e, false)}
+                >
                   <div dangerouslySetInnerHTML={{ __html: selected?.content || "<p class='text-zinc-600'>空白笔记</p>" }} />
                 </div>
               )}
