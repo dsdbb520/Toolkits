@@ -102,6 +102,8 @@ struct WItem {
     updated_at: i64,
     #[serde(default)]
     deleted: bool,
+    #[serde(default)]
+    is_physical: bool,
     // 价格快照
     #[serde(default)]
     status: Option<String>,
@@ -173,6 +175,7 @@ fn init_db(conn: &Connection) {
             created_at INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL DEFAULT 0,
             deleted INTEGER NOT NULL DEFAULT 0,
+            is_physical INTEGER NOT NULL DEFAULT 0,
             last_status TEXT,
             last_currency TEXT,
             last_final_formatted TEXT,
@@ -193,6 +196,23 @@ fn init_db(conn: &Connection) {
         CREATE INDEX IF NOT EXISTS idx_wh_user_item ON wishlist_history(user_id, item_id);",
     )
     .expect("failed to init wishlist tables");
+
+    // 旧库迁移：补 is_physical 列
+    let has_phys: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('wishlist_items') WHERE name='is_physical'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+    if !has_phys {
+        conn.execute(
+            "ALTER TABLE wishlist_items ADD COLUMN is_physical INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .ok();
+    }
 
     // 检查 notes 表是否已有 user_id 列
     let has_user_id: bool = conn
@@ -487,15 +507,16 @@ async fn wishlist_sync(
         if srv_updated.map_or(true, |su| it.updated_at > su) {
             db.execute(
                 "INSERT INTO wishlist_items
-                    (user_id,id,platform,region,product_key,title,image,store_url,target_cny,created_at,updated_at,deleted)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+                    (user_id,id,platform,region,product_key,title,image,store_url,target_cny,created_at,updated_at,deleted,is_physical)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
                  ON CONFLICT(user_id,id) DO UPDATE SET
                     platform=excluded.platform, region=excluded.region, product_key=excluded.product_key,
                     title=excluded.title, image=excluded.image, store_url=excluded.store_url,
-                    target_cny=excluded.target_cny, updated_at=excluded.updated_at, deleted=excluded.deleted",
+                    target_cny=excluded.target_cny, updated_at=excluded.updated_at, deleted=excluded.deleted,
+                    is_physical=excluded.is_physical",
                 params![
                     user_id, it.id, it.platform, it.region, it.product_key, it.title, it.image,
-                    it.store_url, it.target_cny, it.created_at, it.updated_at, it.deleted as i64
+                    it.store_url, it.target_cny, it.created_at, it.updated_at, it.deleted as i64, it.is_physical as i64
                 ],
             )
             .ok();
@@ -537,7 +558,7 @@ async fn wishlist_sync(
     let mut stmt = db
         .prepare(
             "SELECT id,platform,region,product_key,title,image,store_url,target_cny,created_at,updated_at,deleted,
-                    last_status,last_currency,last_final_formatted,last_initial_formatted,last_discount,last_final_cny,last_checked_at
+                    last_status,last_currency,last_final_formatted,last_initial_formatted,last_discount,last_final_cny,last_checked_at,is_physical
              FROM wishlist_items WHERE user_id=?1 AND updated_at > ?2",
         )
         .unwrap();
@@ -562,6 +583,7 @@ async fn wishlist_sync(
                 discount_percent: row.get::<_, Option<i64>>(15)?.unwrap_or(0),
                 final_cny: row.get(16)?,
                 checked_at: row.get::<_, Option<i64>>(17)?.unwrap_or(0),
+                is_physical: row.get::<_, i64>(18)? != 0,
                 low_cny: None,
             })
         })

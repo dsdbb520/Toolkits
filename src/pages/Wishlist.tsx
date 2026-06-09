@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Plus, Loader2, AlertCircle, Tag, RefreshCw, Trash2,
-  ExternalLink, Globe, Check, Target, TrendingDown, Pencil, Cloud,
+  ExternalLink, Globe, Check, Target, TrendingDown, Pencil, Cloud, Package, X,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 interface HistPoint { t: number; cny: number | null; }
 interface WishItem {
   id: string;
-  platform: "steam" | "ps" | "ns";
+  platform: "steam" | "ps" | "ns" | "custom";
   region: string;
   product_key: string;
   title: string;
@@ -32,15 +32,17 @@ interface WishItem {
   history: HistPoint[];
   hit_target: boolean;
   unseen_drop: boolean;
+  is_physical: boolean;
 }
 
 // ─── 平台 / 区域展示 ──────────────────────────────────────────
 
-const PLATFORM_LABEL: Record<string, string> = { steam: "Steam", ps: "PlayStation", ns: "Switch" };
+const PLATFORM_LABEL: Record<string, string> = { steam: "Steam", ps: "PlayStation", ns: "Switch", custom: "自定义" };
 const PLATFORM_COLOR: Record<string, string> = {
   steam: "bg-sky-600/20 text-sky-400",
   ps: "bg-blue-600/20 text-blue-400",
   ns: "bg-red-600/20 text-red-400",
+  custom: "bg-purple-600/20 text-purple-400",
 };
 
 // 常见区域（用于 Steam 选区 + 卡片旗帜显示）
@@ -88,6 +90,10 @@ export default function Wishlist() {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
+  // 自定义条目 添加/编辑 表单（id 存在=编辑）
+  const [customForm, setCustomForm] = useState<null | {
+    id?: string; title: string; region: string; isPhysical: boolean; cur: string; orig: string; target: string;
+  }>(null);
 
   // 代理设置（与 Steam 价格共用）
   const [proxyMode, setProxyMode] = useState<"system" | "none" | "manual">("system");
@@ -176,6 +182,40 @@ export default function Wishlist() {
     try {
       await invoke("wishlist_set_title", { id, title: v });
       setItems((prev) => prev.map((i) => (i.id === id ? { ...i, title: v } : i)));
+    } catch (e) { setError(String(e)); }
+  };
+
+  // ── 自定义条目 ──
+  const numFrom = (s: string | null) => (s ? s.replace(/[^0-9.]/g, "") : "");
+  const parseNum = (s: string) => { const v = parseFloat(s.trim()); return Number.isFinite(v) ? v : null; };
+  const openAddCustom = () =>
+    setCustomForm({ title: "", region: "", isPhysical: false, cur: "", orig: "", target: "" });
+  const openEditCustom = (it: WishItem) =>
+    setCustomForm({
+      id: it.id, title: it.title, region: it.region, isPhysical: it.is_physical,
+      cur: it.final_cny != null ? String(it.final_cny) : "",
+      orig: numFrom(it.initial_formatted),
+      target: it.target_cny != null ? String(it.target_cny) : "",
+    });
+  const submitCustom = async () => {
+    if (!customForm) return;
+    const f = customForm;
+    if (!f.title.trim()) { setError("游戏名不能为空"); return; }
+    try {
+      if (f.id) {
+        const item = await invoke<WishItem>("wishlist_update_custom", {
+          id: f.id, title: f.title, region: f.region, isPhysical: f.isPhysical,
+          curCny: parseNum(f.cur), origCny: parseNum(f.orig),
+        });
+        setItems((prev) => prev.map((i) => (i.id === f.id ? item : i)));
+      } else {
+        const item = await invoke<WishItem>("wishlist_add_custom", {
+          title: f.title, region: f.region, isPhysical: f.isPhysical,
+          curCny: parseNum(f.cur), origCny: parseNum(f.orig), targetCny: parseNum(f.target),
+        });
+        setItems((prev) => [item, ...prev]);
+      }
+      setCustomForm(null);
     } catch (e) { setError(String(e)); }
   };
 
@@ -274,7 +314,78 @@ export default function Wishlist() {
             className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-40">
             {adding ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />} 添加
           </button>
+          <button onClick={openAddCustom}
+            title="手动添加（实体卡带/盘、或不便用链接的条目）"
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100">
+            <Package size={15} /> 自定义
+          </button>
         </div>
+
+        {/* 自定义条目 添加/编辑 弹窗 */}
+        {customForm && (
+          <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-4"
+            onClick={() => setCustomForm(null)}>
+            <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl shadow-black/40"
+              onClick={(e) => e.stopPropagation()}>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-sm font-medium text-zinc-100">
+                  {customForm.id ? "编辑自定义条目" : "添加自定义条目"}
+                </h3>
+                <button onClick={() => setCustomForm(null)} className="text-zinc-500 hover:text-zinc-200"><X size={16} /></button>
+              </div>
+              <div className="flex flex-col gap-3">
+                <label className="text-xs text-zinc-400">
+                  游戏名
+                  <input autoFocus value={customForm.title}
+                    onChange={(e) => setCustomForm((f) => ({ ...f!, title: e.target.value }))}
+                    className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none" />
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="text-xs text-zinc-400">
+                    现价 ¥
+                    <input value={customForm.cur} inputMode="decimal"
+                      onChange={(e) => setCustomForm((f) => ({ ...f!, cur: e.target.value }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none" />
+                  </label>
+                  <label className="text-xs text-zinc-400">
+                    原价 ¥（可选）
+                    <input value={customForm.orig} inputMode="decimal"
+                      onChange={(e) => setCustomForm((f) => ({ ...f!, orig: e.target.value }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none" />
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="text-xs text-zinc-400">
+                    区服
+                    <input value={customForm.region} placeholder="如 港版 / 国行 / 日版"
+                      onChange={(e) => setCustomForm((f) => ({ ...f!, region: e.target.value }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none" />
+                  </label>
+                  {!customForm.id && (
+                    <label className="text-xs text-zinc-400">
+                      目标价 ¥（可选）
+                      <input value={customForm.target} inputMode="decimal"
+                        onChange={(e) => setCustomForm((f) => ({ ...f!, target: e.target.value }))}
+                        className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none" />
+                    </label>
+                  )}
+                </div>
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
+                  <input type="checkbox" checked={customForm.isPhysical}
+                    onChange={(e) => setCustomForm((f) => ({ ...f!, isPhysical: e.target.checked }))}
+                    className="h-4 w-4 accent-blue-600" />
+                  实体卡带 / 游戏盘
+                </label>
+              </div>
+              <div className="mt-5 flex justify-end gap-2">
+                <button onClick={() => setCustomForm(null)}
+                  className="rounded-lg border border-zinc-700 px-3.5 py-2 text-sm text-zinc-300 hover:border-zinc-500">取消</button>
+                <button onClick={submitCustom}
+                  className="rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-blue-500">保存</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-400">
@@ -308,7 +419,14 @@ export default function Wishlist() {
                       <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium", PLATFORM_COLOR[it.platform])}>
                         {PLATFORM_LABEL[it.platform]}
                       </span>
-                      <span className="shrink-0 text-xs text-zinc-500">{reg.flag} {reg.name}</span>
+                      <span className="shrink-0 text-xs text-zinc-500">
+                        {it.platform === "custom" ? (it.region || "自定义") : `${reg.flag} ${reg.name}`}
+                      </span>
+                      {it.is_physical && (
+                        <span className="flex shrink-0 items-center gap-1 rounded bg-zinc-700/50 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                          <Package size={10} /> 实体
+                        </span>
+                      )}
                       {it.hit_target && (
                         <span className="flex shrink-0 items-center gap-1 rounded bg-green-600/20 px-1.5 py-0.5 text-[10px] font-medium text-green-400">
                           <TrendingDown size={10} /> 达到目标价
@@ -333,8 +451,8 @@ export default function Wishlist() {
                       <div className="group mt-1 flex items-center gap-1.5">
                         <p className="truncate text-sm font-medium text-zinc-100" title={it.title}>{it.title}</p>
                         <button
-                          onClick={() => setEditing({ id: it.id, value: it.title })}
-                          title="重命名"
+                          onClick={() => (it.platform === "custom" ? openEditCustom(it) : setEditing({ id: it.id, value: it.title }))}
+                          title={it.platform === "custom" ? "编辑" : "重命名"}
                           className="shrink-0 text-zinc-600 opacity-0 transition-opacity hover:text-zinc-300 group-hover:opacity-100"
                         >
                           <Pencil size={12} />
@@ -354,7 +472,9 @@ export default function Wishlist() {
                               <Tag size={11} /> -{it.discount_percent}%
                             </span>
                           )}
-                          {it.final_cny != null && <span className="text-xs text-zinc-500">≈¥{it.final_cny.toFixed(2)}</span>}
+                          {it.final_cny != null && it.platform !== "custom" && (
+                            <span className="text-xs text-zinc-500">≈¥{it.final_cny.toFixed(2)}</span>
+                          )}
                         </>
                       ) : it.status === "free" ? (
                         <span className="text-sm text-blue-400">免费</span>

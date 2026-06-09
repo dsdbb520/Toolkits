@@ -317,6 +317,8 @@ pub fn run() {
             wishlist::wishlist_remove,
             wishlist::wishlist_set_target,
             wishlist::wishlist_set_title,
+            wishlist::wishlist_add_custom,
+            wishlist::wishlist_update_custom,
             wishlist::wishlist_refresh,
             wishlist::wishlist_sync,
             wishlist::wishlist_unseen_count,

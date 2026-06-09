@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Search, Loader2, AlertCircle, Tag, ArrowDownUp,
-  Crown, Ban, Gift, Clock, Globe, Check,
+  Crown, Ban, Gift, Clock, Globe, Check, Heart,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
@@ -93,6 +93,23 @@ export default function SteamPrice() {
   const [result, setResult] = useState<PriceQueryResult | null>(null);
   const [error, setError] = useState("");
   const [sortByPrice, setSortByPrice] = useState(false);
+  // 已加入愿望单的区域（按 cc）；正在添加的 cc
+  const [added, setAdded] = useState<Set<string>>(new Set());
+  const [addingCc, setAddingCc] = useState<string | null>(null);
+
+  const addToWishlist = async (cc: string) => {
+    if (!result) return;
+    setAddingCc(cc);
+    setError("");
+    try {
+      await invoke("wishlist_add", { input: String(result.appid), region: cc, targetCny: null });
+      setAdded((prev) => new Set(prev).add(cc));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setAddingCc(null);
+    }
+  };
 
   // 代理设置
   const [proxyMode, setProxyMode] = useState<"system" | "none" | "manual">("system");
@@ -206,6 +223,7 @@ export default function SteamPrice() {
     setError("");
     setResult(null);
     setSortByPrice(false);
+    setAdded(new Set());
     try {
       const res = await invoke<PriceQueryResult>("steam_price_query", { appid: app.appid });
       setResult(res);
@@ -405,6 +423,7 @@ export default function SteamPrice() {
                     <th className="px-4 py-2.5 font-medium">价格</th>
                     <th className="px-4 py-2.5 font-medium">状态</th>
                     <th className="px-4 py-2.5 text-right font-medium">约合人民币</th>
+                    <th className="px-4 py-2.5 text-right font-medium"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -455,6 +474,25 @@ export default function SteamPrice() {
                             </span>
                           ) : (
                             <span className="text-zinc-700">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-right">
+                          {(r.status === "ok" || r.status === "free") && (
+                            added.has(r.cc) ? (
+                              <span className="inline-flex items-center gap-1 text-xs text-green-400">
+                                <Check size={13} /> 已添加
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => addToWishlist(r.cc)}
+                                disabled={addingCc === r.cc}
+                                title="添加到心愿单追踪"
+                                className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 transition-colors hover:border-blue-600 hover:text-blue-400 disabled:opacity-40"
+                              >
+                                {addingCc === r.cc ? <Loader2 size={12} className="animate-spin" /> : <Heart size={12} />}
+                                加入心愿单
+                              </button>
+                            )
                           )}
                         </td>
                       </tr>

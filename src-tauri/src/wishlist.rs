@@ -31,6 +31,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             updated_at INTEGER NOT NULL DEFAULT 0,
             deleted INTEGER NOT NULL DEFAULT 0,
             unseen_drop INTEGER NOT NULL DEFAULT 0,
+            is_physical INTEGER NOT NULL DEFAULT 0,
             last_status TEXT,
             last_currency TEXT,
             last_final_formatted TEXT,
@@ -57,6 +58,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         ("updated_at", "INTEGER NOT NULL DEFAULT 0"),
         ("deleted", "INTEGER NOT NULL DEFAULT 0"),
         ("unseen_drop", "INTEGER NOT NULL DEFAULT 0"),
+        ("is_physical", "INTEGER NOT NULL DEFAULT 0"),
     ] {
         let exists: i64 = conn
             .query_row(
@@ -133,6 +135,8 @@ pub struct WishItem {
     hit_target: bool,
     /// 自上次查看后降价了（未读红点）
     unseen_drop: bool,
+    /// 自定义条目：实体卡带/游戏盘
+    is_physical: bool,
 }
 
 // ─── 小工具 ────────────────────────────────────────────────────
@@ -773,6 +777,7 @@ fn row_to_item(conn: &Connection, row: &rusqlite::Row) -> rusqlite::Result<WishI
         history,
         hit_target,
         unseen_drop: row.get::<_, Option<i64>>("unseen_drop")?.unwrap_or(0) != 0,
+        is_physical: row.get::<_, Option<i64>>("is_physical")?.unwrap_or(0) != 0,
     })
 }
 
@@ -858,6 +863,16 @@ pub async fn wishlist_add(
     let ts = now();
     {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
+        // 去重：同 平台+区域+商品 已存在（未删除）则直接返回它，避免重复添加
+        if let Ok(existing) = conn.query_row(
+            "SELECT id FROM wishlist_items WHERE platform=?1 AND region=?2 AND product_key=?3 AND deleted=0",
+            params![r.platform, r.region, r.product_key],
+            |row| row.get::<_, String>(0),
+        ) {
+            return conn
+                .query_row("SELECT * FROM wishlist_items WHERE id=?1", params![existing], |row| row_to_item(&conn, row))
+                .map_err(|e| e.to_string());
+        }
         conn.execute(
             "INSERT INTO wishlist_items
                 (id, platform, region, product_key, extra, title, image, store_url, target_cny, created_at, updated_at)
@@ -926,12 +941,118 @@ pub fn wishlist_set_title(
     Ok(())
 }
 
+// ─── 自定义条目（手动维护价格，不自动取价）──────────────────────
+
+fn fmt_cny(v: f64) -> String {
+    if v.fract() == 0.0 {
+        format!("¥{}", v as i64)
+    } else {
+        format!("¥{:.2}", v)
+    }
+}
+
+/// 设置自定义条目的现价/原价（写 last_* 并记一条历史）
+fn set_custom_price(
+    conn: &Connection,
+    id: &str,
+    cur: Option<f64>,
+    orig: Option<f64>,
+    ts: i64,
+) -> rusqlite::Result<()> {
+    match cur {
+        Some(c) if c > 0.0 => {
+            let (initial, discount) = match orig {
+                Some(o) if o > c => (Some(fmt_cny(o)), ((1.0 - c / o) * 100.0).round() as i64),
+                _ => (None, 0),
+            };
+            conn.execute(
+                "UPDATE wishlist_items SET last_status='ok', last_currency='CNY', last_final_formatted=?2,
+                    last_initial_formatted=?3, last_discount=?4, last_final_raw=?5, last_final_cny=?5, last_checked_at=?6
+                 WHERE id=?1",
+                params![id, fmt_cny(c), initial, discount, c, ts],
+            )?;
+            conn.execute(
+                "INSERT INTO price_history (item_id, checked_at, status, final_raw, final_cny, discount_percent)
+                 VALUES (?1,?2,'ok',?3,?3,?4)",
+                params![id, ts, c, discount],
+            )?;
+        }
+        _ => {
+            conn.execute(
+                "UPDATE wishlist_items SET last_status='unavailable', last_final_cny=NULL,
+                    last_final_formatted=NULL, last_initial_formatted=NULL, last_discount=0, last_checked_at=?2
+                 WHERE id=?1",
+                params![id, ts],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn wishlist_add_custom(
+    state: tauri::State<'_, crate::AppState>,
+    title: String,
+    region: String,
+    is_physical: bool,
+    cur_cny: Option<f64>,
+    orig_cny: Option<f64>,
+    target_cny: Option<f64>,
+) -> Result<WishItem, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("游戏名不能为空".into());
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let ts = now();
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO wishlist_items
+            (id, platform, region, product_key, title, target_cny, created_at, updated_at, is_physical)
+         VALUES (?1,'custom',?2,'',?3,?4,?5,?6,?7)",
+        params![id, region.trim(), title, target_cny, ts, now_ms(), is_physical as i64],
+    )
+    .map_err(|e| e.to_string())?;
+    set_custom_price(&conn, &id, cur_cny, orig_cny, ts).map_err(|e| e.to_string())?;
+    conn.query_row("SELECT * FROM wishlist_items WHERE id=?1", params![id], |row| row_to_item(&conn, row))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn wishlist_update_custom(
+    state: tauri::State<'_, crate::AppState>,
+    id: String,
+    title: String,
+    region: String,
+    is_physical: bool,
+    cur_cny: Option<f64>,
+    orig_cny: Option<f64>,
+) -> Result<WishItem, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("游戏名不能为空".into());
+    }
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE wishlist_items SET title=?2, region=?3, is_physical=?4, updated_at=?5
+         WHERE id=?1 AND platform='custom'",
+        params![id, title, region.trim(), is_physical as i64, now_ms()],
+    )
+    .map_err(|e| e.to_string())?;
+    set_custom_price(&conn, &id, cur_cny, orig_cny, now()).map_err(|e| e.to_string())?;
+    conn.query_row("SELECT * FROM wishlist_items WHERE id=?1", params![id], |row| row_to_item(&conn, row))
+        .map_err(|e| e.to_string())
+}
+
 /// 重新拉取所有未删除条目的当前价并写回（含降价标记）。不持锁跨 await。
 async fn refetch_all(state: &tauri::State<'_, crate::AppState>) -> Result<(), String> {
     let rows: Vec<(String, String, String, String, String)> = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
-            .prepare("SELECT id, platform, region, product_key, title FROM wishlist_items WHERE deleted=0")
+            .prepare(
+                "SELECT id, platform, region, product_key, title FROM wishlist_items
+                 WHERE deleted=0 AND platform != 'custom'",
+            )
             .map_err(|e| e.to_string())?;
         let it = stmt
             .query_map([], |r| {
@@ -1012,6 +1133,8 @@ struct WireItem {
     #[serde(default)]
     deleted: bool,
     #[serde(default)]
+    is_physical: bool,
+    #[serde(default)]
     status: Option<String>,
     #[serde(default)]
     currency: Option<String>,
@@ -1045,7 +1168,7 @@ struct WireResp {
 fn gather_changed(conn: &Connection, since: i64) -> rusqlite::Result<Vec<WireItem>> {
     let mut stmt = conn.prepare(
         "SELECT id,platform,region,product_key,title,image,store_url,target_cny,created_at,updated_at,deleted,
-                last_status,last_currency,last_final_formatted,last_initial_formatted,last_discount,last_final_cny,last_checked_at
+                last_status,last_currency,last_final_formatted,last_initial_formatted,last_discount,last_final_cny,last_checked_at,is_physical
          FROM wishlist_items WHERE updated_at > ?1",
     )?;
     let rows = stmt.query_map(params![since], |r| {
@@ -1068,6 +1191,7 @@ fn gather_changed(conn: &Connection, since: i64) -> rusqlite::Result<Vec<WireIte
             discount_percent: r.get::<_, Option<i64>>(15)?.unwrap_or(0),
             final_cny: r.get(16)?,
             checked_at: r.get::<_, Option<i64>>(17)?.unwrap_or(0),
+            is_physical: r.get::<_, i64>(18)? != 0,
             low_cny: None,
         })
     })?;
@@ -1090,12 +1214,12 @@ fn apply_remote(conn: &Connection, w: &WireItem) -> rusqlite::Result<()> {
         None => {
             conn.execute(
                 "INSERT INTO wishlist_items
-                    (id,platform,region,product_key,title,image,store_url,target_cny,created_at,updated_at,deleted,
+                    (id,platform,region,product_key,title,image,store_url,target_cny,created_at,updated_at,deleted,is_physical,
                      last_status,last_currency,last_final_formatted,last_initial_formatted,last_discount,last_final_cny,last_checked_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
                 params![
                     w.id, w.platform, w.region, w.product_key, w.title, w.image, w.store_url, w.target_cny,
-                    w.created_at, w.updated_at, w.deleted as i64,
+                    w.created_at, w.updated_at, w.deleted as i64, w.is_physical as i64,
                     w.status, w.currency, w.final_formatted, w.initial_formatted, w.discount_percent, w.final_cny, w.checked_at
                 ],
             )?;
@@ -1111,10 +1235,10 @@ fn apply_remote(conn: &Connection, w: &WireItem) -> rusqlite::Result<()> {
             if w.updated_at > lu {
                 conn.execute(
                     "UPDATE wishlist_items SET platform=?2,region=?3,product_key=?4,title=?5,image=?6,
-                        store_url=?7,target_cny=?8,deleted=?9,updated_at=?10 WHERE id=?1",
+                        store_url=?7,target_cny=?8,deleted=?9,updated_at=?10,is_physical=?11 WHERE id=?1",
                     params![
                         w.id, w.platform, w.region, w.product_key, w.title, w.image, w.store_url,
-                        w.target_cny, w.deleted as i64, w.updated_at
+                        w.target_cny, w.deleted as i64, w.updated_at, w.is_physical as i64
                     ],
                 )?;
             }
