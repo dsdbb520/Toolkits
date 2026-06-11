@@ -7,7 +7,7 @@ import { Underline } from "@tiptap/extension-underline";
 import { TextStyle } from "@tiptap/extension-text-style";
 import { Color } from "@tiptap/extension-color";
 import { Highlight } from "@tiptap/extension-highlight";
-import { LineHeight, AnchorLink } from "@/lib/notesExtensions";
+import { LineHeight, AnchorMark } from "@/lib/notesExtensions";
 import {
   ArrowLeft, Plus, Trash2, Search, FileText,
   Bold, Italic, Underline as UnderlineIcon,
@@ -102,7 +102,8 @@ export default function Notes() {
   const [search, setSearch] = useState("");
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showLineHeight, setShowLineHeight] = useState(false);
-  const [pendingAnchor, setPendingAnchor] = useState<string | null>(null); // 锚点绑定：已选第一行待选第二行
+  const [pendingAnchor, setPendingAnchor] = useState<string | null>(null); // 锚点绑定：已绑第一个词待绑第二个
+  const [anchorHint, setAnchorHint] = useState(""); // 临时提示（如未选中文字）
   const [isEditing, setIsEditing] = useState(false);
   const [showSyncPanel, setShowSyncPanel] = useState(false);
   const [syncSettings, setSyncSettings] = useState<SyncSettings>({ server_url: "", token: "", last_sync_at: 0, username: "" });
@@ -134,7 +135,7 @@ export default function Notes() {
       Color,
       Highlight.configure({ multicolor: true }),
       LineHeight,
-      AnchorLink,
+      AnchorMark,
     ],
     content: "",
     editorProps: {
@@ -158,21 +159,25 @@ export default function Notes() {
     },
   });
 
-  // ── 两行互跳锚点 ──
+  // ── 两词互跳锚点（选中文字绑定，点击跳到配对处）──
+  const flashHint = (msg: string) => {
+    setAnchorHint(msg);
+    setTimeout(() => setAnchorHint(""), 2200);
+  };
   const onAnchorClick = () => {
     if (!editor) return;
-    const cur =
-      editor.getAttributes("paragraph").anchorPair ||
-      editor.getAttributes("heading").anchorPair ||
-      null;
+    const empty = editor.state.selection.empty;
+    const activeId = editor.getAttributes("anchorMark").pairId as string | undefined;
     if (pendingAnchor) {
-      editor.chain().focus().setBlockAnchor(pendingAnchor).run(); // 完成绑定第二行
+      if (empty) { flashHint("请选中要作为第二处的文字，再点一次"); return; }
+      editor.chain().focus().setAnchorMark(pendingAnchor).run(); // 绑定第二处
       setPendingAnchor(null);
-    } else if (cur) {
-      editor.chain().focus().clearAnchorById(cur).run(); // 在已绑定行上点 = 解除该对
+    } else if (activeId) {
+      editor.chain().focus().clearAnchorMarkById(activeId).run(); // 在已绑定文字上点 = 解除该对
     } else {
+      if (empty) { flashHint("请先选中要互跳的文字（词/短语）"); return; }
       const id = "a" + Math.random().toString(36).slice(2, 9);
-      editor.chain().focus().setBlockAnchor(id).run(); // 标记第一行，等待选第二行
+      editor.chain().focus().setAnchorMark(id).run(); // 绑定第一处，等待选第二处
       setPendingAnchor(id);
     }
   };
@@ -201,7 +206,7 @@ export default function Notes() {
   };
 
   // 切换笔记时清掉「待绑定」状态
-  useEffect(() => { setPendingAnchor(null); }, [selectedId]);
+  useEffect(() => { setPendingAnchor(null); setAnchorHint(""); }, [selectedId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -602,22 +607,17 @@ export default function Notes() {
                       </div>
                     )}
                   </div>
-                  {/* 两行互跳锚点 */}
+                  {/* 两词互跳锚点 */}
                   <ToolbarBtn
-                    active={
-                      !!pendingAnchor ||
-                      !!(editor?.getAttributes("paragraph").anchorPair || editor?.getAttributes("heading").anchorPair)
-                    }
+                    active={!!pendingAnchor || !!editor?.isActive("anchorMark")}
                     onClick={onAnchorClick}
                     title={
                       pendingAnchor
-                        ? "已选第一行，把光标移到第二行再点一次完成绑定"
-                        : "两行互跳：选第一行点此，再到第二行点一次（在已绑定行点击=解除）"
+                        ? "已绑第一处，选中第二处文字再点一次完成"
+                        : "两词互跳：选中文字点此，再选另一处点一次（在已绑定文字上点=解除）"
                     }
                   >
-                    {(editor?.getAttributes("paragraph").anchorPair || editor?.getAttributes("heading").anchorPair) && !pendingAnchor
-                      ? <Unlink size={14} />
-                      : <Link2 size={14} />}
+                    {editor?.isActive("anchorMark") && !pendingAnchor ? <Unlink size={14} /> : <Link2 size={14} />}
                   </ToolbarBtn>
                 </>
               ) : (
@@ -672,11 +672,13 @@ export default function Notes() {
             </div>
 
             {/* 锚点绑定提示 */}
-            {isEditing && pendingAnchor && (
+            {isEditing && (pendingAnchor || anchorHint) && (
               <div className="flex items-center gap-2 border-b border-blue-900/40 bg-blue-950/30 px-8 py-1.5 text-xs text-blue-300">
                 <Link2 size={12} />
-                已选第一行，把光标移到要互跳的第二行，再点一次链接按钮完成绑定
-                <button onClick={() => setPendingAnchor(null)} className="ml-1 text-blue-400 underline hover:text-blue-300">取消</button>
+                {anchorHint || "已绑定第一处，选中要互跳的第二处文字，再点一次链接按钮完成"}
+                {pendingAnchor && (
+                  <button onClick={() => setPendingAnchor(null)} className="ml-1 text-blue-400 underline hover:text-blue-300">取消</button>
+                )}
               </div>
             )}
 
