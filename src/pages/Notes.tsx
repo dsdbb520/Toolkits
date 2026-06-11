@@ -13,7 +13,7 @@ import {
   Bold, Italic, Underline as UnderlineIcon,
   Heading1, Heading2, Heading3, List, ListOrdered,
   BookOpen, FileEdit, Pencil, RefreshCw, Settings2, X,
-  StretchVertical, Link2, Unlink,
+  StretchVertical, Link2, Unlink, Download, Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -102,6 +102,8 @@ export default function Notes() {
   const [search, setSearch] = useState("");
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showLineHeight, setShowLineHeight] = useState(false);
+  const [showExport, setShowExport] = useState(false);
+  const [ioMsg, setIoMsg] = useState(""); // 导入/导出 临时提示
   const [pendingAnchor, setPendingAnchor] = useState<string | null>(null); // 锚点绑定：已绑第一个词待绑第二个
   const [anchorHint, setAnchorHint] = useState(""); // 临时提示（如未选中文字）
   const [isEditing, setIsEditing] = useState(false);
@@ -315,6 +317,30 @@ export default function Notes() {
     const note = await invoke<Note>("create_note");
     setNotes((prev) => [note, ...prev]);
     selectNote(note);
+  }
+
+  const flashIo = (msg: string) => { setIoMsg(msg); setTimeout(() => setIoMsg(""), 4000); };
+
+  // 导入 .md/.txt/.html 为一条新笔记
+  async function handleImport() {
+    try {
+      const note = await invoke<Note | null>("notes_import");
+      if (note) { setNotes((prev) => [note, ...prev]); selectNote(note); flashIo("已导入为新笔记"); }
+    } catch (e) {
+      flashIo(`导入失败：${e}`);
+    }
+  }
+
+  // 导出当前笔记（md / html / txt）
+  async function handleExport(format: "md" | "html" | "txt") {
+    setShowExport(false);
+    if (!selectedId) return;
+    try {
+      const path = await invoke<string | null>("notes_export", { id: selectedId, format });
+      if (path) flashIo(`已导出到：${path}`);
+    } catch (e) {
+      flashIo(`导出失败：${e}`);
+    }
   }
 
   async function handleDelete() {
@@ -661,6 +687,39 @@ export default function Notes() {
                   {selected?.is_note ? "转为备忘录" : "转为笔记"}
                 </button>
                 <div className="mx-0.5 h-4 w-px bg-zinc-700" />
+                {/* 导入 */}
+                <button
+                  onClick={handleImport}
+                  title="导入 .md / .txt / .html 为新笔记"
+                  className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-zinc-500 hover:bg-zinc-700 hover:text-zinc-100 transition-colors"
+                >
+                  <Upload size={13} /> 导入
+                </button>
+                {/* 导出 */}
+                <div className="relative">
+                  <button
+                    onClick={() => selected && setShowExport((v) => !v)}
+                    disabled={!selected}
+                    title="导出当前笔记（喂给 AI 修改 / 分享给别人）"
+                    className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-zinc-500 transition-colors hover:bg-zinc-700 hover:text-zinc-100 disabled:opacity-40"
+                  >
+                    <Download size={13} /> 导出
+                  </button>
+                  {showExport && selected && (
+                    <div className="absolute right-0 top-full z-50 mt-1 flex flex-col rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
+                      {([["md", "Markdown（.md）"], ["html", "HTML（.html）"], ["txt", "纯文本（.txt）"]] as const).map(([fmt, label]) => (
+                        <button
+                          key={fmt}
+                          onClick={() => handleExport(fmt)}
+                          className="whitespace-nowrap rounded px-3 py-1 text-left text-xs text-zinc-300 hover:bg-zinc-700"
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="mx-0.5 h-4 w-px bg-zinc-700" />
                 <button
                   onClick={handleDelete}
                   title="删除"
@@ -670,6 +729,13 @@ export default function Notes() {
                 </button>
               </div>
             </div>
+
+            {/* 导入/导出 提示 */}
+            {ioMsg && (
+              <div className="truncate border-b border-zinc-800 bg-zinc-900/60 px-8 py-1.5 text-xs text-zinc-300" title={ioMsg}>
+                {ioMsg}
+              </div>
+            )}
 
             {/* 锚点绑定提示 */}
             {isEditing && (pendingAnchor || anchorHint) && (

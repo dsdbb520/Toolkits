@@ -1,6 +1,6 @@
 [package]
 name = "seraph-toolkits"
-version = "1.2.3"
+version = "1.2.4"
 description = "SeraphToolkits"
 authors = ["Seraph"]
 edition = "2021"
@@ -25,6 +25,8 @@ futures-util = "0.3"
 rfd = "0.14"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "tiff", "webp"] }
 imageproc = "0.25"
+pulldown-cmark = "0.12"
+html2md = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

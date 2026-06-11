@@ -2,6 +2,7 @@ mod bili;
 mod media;
 mod image_editor;
 mod notes;
+mod notes_io;
 mod pricing;
 mod steam;
 mod steam_price;
@@ -272,6 +273,8 @@ pub fn run() {
             update_note,
             delete_note,
             toggle_note_type,
+            notes_io::notes_export,
+            notes_io::notes_import,
             get_sync_settings,
             save_sync_settings,
             auth_sync,
