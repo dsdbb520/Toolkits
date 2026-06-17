@@ -420,18 +420,15 @@ async fn sync(
         let server_note = get_note(&db, &note.id, &user_id);
 
         if let Some(ref sv) = server_note {
-            // 双方在上次同步后都修改了 → 冲突，交给客户端处理
-            if sv.updated_at > req.last_sync_at && note.updated_at > req.last_sync_at {
+            // 服务端副本在客户端上次同步后被改过（多设备并发）→ 冲突，交给客户端处理。
+            // 只看服务端时间戳（服务端权威），避免客户端/服务端时钟偏差导致的假冲突。
+            if sv.updated_at > req.last_sync_at {
                 conflicts.push(ConflictPair { mine: note.clone(), theirs: sv.clone() });
-                continue;
-            }
-            // 服务端版本更新或相同 → 跳过
-            if sv.updated_at >= note.updated_at {
                 continue;
             }
         }
 
-        // 客户端版本更新或是新笔记 → 应用
+        // 应用客户端版本，统一用服务器时间戳写入（让时间戳与同步游标可比）
         db.execute(
             "INSERT INTO notes(id,user_id,title,content,is_note,deleted,created_at,updated_at)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
@@ -442,7 +439,7 @@ async fn sync(
             params![
                 note.id, user_id, note.title, note.content,
                 note.is_note as i64, note.deleted as i64,
-                note.created_at, note.updated_at
+                note.created_at, synced_at
             ],
         )
         .ok();

@@ -1,0 +1,13 @@
+# 硬字幕 OCR sidecar 依赖（仅作参考；实际安装由 app 的「一键安装」按引擎选择性安装）
+#
+# 公共：
+opencv-python>=4.8
+numpy>=1.24
+rapidfuzz>=3.0
+#
+# 引擎二选一：
+# RapidOCR（推荐，轻量、跨平台快，基于 onnxruntime）：
+rapidocr-onnxruntime>=1.3
+# PaddleOCR（更准但重，x86 上 oneDNN 偶有问题）：
+# paddleocr
+# paddlepaddle

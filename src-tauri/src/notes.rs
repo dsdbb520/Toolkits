@@ -195,31 +195,56 @@ pub fn create_with_content(conn: &Connection, title: &str, content: &str) -> Res
     Ok(note)
 }
 
-/// 将服务端返回的笔记合并到本地（last-write-wins by updated_at）
+/// 将服务端返回的笔记合并到本地。
+/// 内容一致时仅对齐时间戳到服务端值（让本地推上去的笔记收敛到服务器时钟，避免时钟偏差下反复重推/假冲突）；
+/// 否则 last-write-wins：服务端更新则覆盖本地，本地更新则保留。
 pub fn apply_remote_notes(conn: &Connection, remote: &[Note]) -> Result<()> {
     for note in remote {
-        let local_updated: Option<i64> = conn
-            .query_row("SELECT updated_at FROM notes WHERE id=?1", params![note.id], |r| r.get(0))
+        let local: Option<Note> = conn
+            .query_row(
+                "SELECT id, title, content, is_note, deleted, created_at, updated_at FROM notes WHERE id=?1",
+                params![note.id],
+                row_to_note,
+            )
             .ok();
 
-        match local_updated {
-            Some(local_ts) if local_ts >= note.updated_at => continue,
-            _ => {
-                conn.execute(
-                    "INSERT INTO notes(id, title, content, is_note, deleted, created_at, updated_at)
-                     VALUES(?1,?2,?3,?4,?5,?6,?7)
-                     ON CONFLICT(id) DO UPDATE SET
-                       title=excluded.title, content=excluded.content,
-                       is_note=excluded.is_note, deleted=excluded.deleted,
-                       updated_at=excluded.updated_at",
-                    params![
-                        note.id, note.title, note.content,
-                        note.is_note as i64, note.deleted as i64,
-                        note.created_at, note.updated_at
-                    ],
-                )?;
+        match local {
+            Some(local) => {
+                let identical = local.title == note.title
+                    && local.content == note.content
+                    && local.is_note == note.is_note
+                    && local.deleted == note.deleted;
+                if identical {
+                    // 服务器回传的就是本地版本，只把时间戳对齐到服务端（收敛）
+                    if local.updated_at != note.updated_at {
+                        conn.execute(
+                            "UPDATE notes SET updated_at=?1 WHERE id=?2",
+                            params![note.updated_at, note.id],
+                        )?;
+                    }
+                    continue;
+                }
+                if local.updated_at >= note.updated_at {
+                    continue; // 本地更新 → 保留
+                }
             }
+            None => {}
         }
+
+        // 新笔记或服务端更新 → 覆盖
+        conn.execute(
+            "INSERT INTO notes(id, title, content, is_note, deleted, created_at, updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)
+             ON CONFLICT(id) DO UPDATE SET
+               title=excluded.title, content=excluded.content,
+               is_note=excluded.is_note, deleted=excluded.deleted,
+               updated_at=excluded.updated_at",
+            params![
+                note.id, note.title, note.content,
+                note.is_note as i64, note.deleted as i64,
+                note.created_at, note.updated_at
+            ],
+        )?;
     }
     Ok(())
 }

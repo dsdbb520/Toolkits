@@ -10,6 +10,7 @@ import {
   Film,
   DollarSign,
   Heart,
+  Captions,
 } from "lucide-react";
 
 const tools = [
@@ -30,6 +31,12 @@ const tools = [
     icon: Film,
     label: "媒体编辑",
     desc: "裁剪、提取音频、格式转换",
+  },
+  {
+    to: "/toolbox/subtitle-ocr",
+    icon: Captions,
+    label: "硬字幕 OCR 对轴",
+    desc: "OCR 扫描硬字幕，自动生成 SRT 外挂字幕",
   },
   {
     to: "/toolbox/steam",

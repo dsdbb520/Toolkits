@@ -125,6 +125,16 @@ struct DUrlItem {
 
 // ─── Helpers ──────────────────────────────────────────────────
 
+fn ffmpeg_runs(p: &str) -> bool {
+    std::process::Command::new(p)
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 pub fn find_ffmpeg() -> Option<String> {
     let candidates = [
         "/opt/homebrew/bin/ffmpeg",
@@ -132,15 +142,52 @@ pub fn find_ffmpeg() -> Option<String> {
         "/usr/bin/ffmpeg",
         "ffmpeg",
     ];
-    candidates.iter().find(|&&p| {
-        std::process::Command::new(p)
-            .arg("-version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }).map(|s| s.to_string())
+    if let Some(p) = candidates.iter().find(|&&p| ffmpeg_runs(p)) {
+        return Some(p.to_string());
+    }
+    // Windows：进程 PATH 可能是 app 启动时的旧快照（装 ffmpeg 后没重启）。
+    // 回读注册表里持久化的 PATH，去里面搜 ffmpeg.exe。
+    #[cfg(windows)]
+    {
+        if let Some(p) = find_ffmpeg_from_registry_path() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn find_ffmpeg_from_registry_path() -> Option<String> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+
+    let mut dirs = String::new();
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    if let Ok(env) =
+        hklm.open_subkey(r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
+    {
+        if let Ok(p) = env.get_value::<String, _>("Path") {
+            dirs.push_str(&p);
+            dirs.push(';');
+        }
+    }
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    if let Ok(env) = hkcu.open_subkey("Environment") {
+        if let Ok(p) = env.get_value::<String, _>("Path") {
+            dirs.push_str(&p);
+        }
+    }
+
+    for dir in dirs.split(';').map(str::trim).filter(|d| !d.is_empty()) {
+        let exe = std::path::Path::new(dir).join("ffmpeg.exe");
+        if exe.exists() {
+            let s = exe.to_string_lossy().to_string();
+            if ffmpeg_runs(&s) {
+                return Some(s);
+            }
+        }
+    }
+    None
 }
 
 async fn run_ffmpeg(ffmpeg: &str, args: &[&str]) -> Result<(), String> {

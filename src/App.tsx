@@ -10,6 +10,7 @@ import Wishlist from "@/pages/Wishlist";
 import Screenshot from "@/pages/Screenshot";
 import ImageEditor from "@/pages/ImageEditor";
 import MediaEditor from "@/pages/MediaEditor";
+import SubtitleOcr from "@/pages/SubtitleOcr";
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
           <Route path="toolbox/screenshot" element={<Screenshot />} />
           <Route path="toolbox/image" element={<ImageEditor />} />
           <Route path="toolbox/media" element={<MediaEditor />} />
+          <Route path="toolbox/subtitle-ocr" element={<SubtitleOcr />} />
         </Route>
       </Routes>
     </BrowserRouter>

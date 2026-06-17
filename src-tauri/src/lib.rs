@@ -6,6 +6,7 @@ mod notes_io;
 mod pricing;
 mod steam;
 mod steam_price;
+mod subtitle_ocr;
 mod wishlist;
 
 use rusqlite::Connection;
@@ -221,17 +222,16 @@ fn resolve_conflict(
     choice: String,
 ) -> Result<String, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    match choice.as_str() {
+    let result = match choice.as_str() {
         "theirs" => {
+            // 采用服务器版本，本地与服务端一致
             notes::force_apply_note(&db, &theirs).map_err(|e| e.to_string())?;
-            Ok(String::new())
+            String::new()
         }
         "mine" => {
-            notes::update(&db, &mine.id, &mine.title, &mine.content)
-                .map_err(|e| e.to_string())?;
-            notes::set_setting(&db, "last_sync_at", &theirs.updated_at.to_string())
-                .map_err(|e| e.to_string())?;
-            Ok(String::new())
+            // 本地 bump 为最新，下一次同步会把它推到服务器覆盖
+            notes::update(&db, &mine.id, &mine.title, &mine.content).map_err(|e| e.to_string())?;
+            String::new()
         }
         "both" => {
             // 原笔记保留服务器版本，新建一条含本机内容的笔记并返回其 ID
@@ -242,10 +242,21 @@ fn resolve_conflict(
                 &mine.content,
             )
             .map_err(|e| e.to_string())?;
-            Ok(new_note.id)
+            new_note.id
         }
-        _ => Err("invalid choice".to_string()),
+        _ => return Err("invalid choice".to_string()),
+    };
+
+    // 把同步游标前移过 theirs.updated_at（取较大值，不回退），
+    // 避免下次同步时服务端仍把这条 theirs 当作"上次同步后被改过"而再次误判冲突。
+    let cur: i64 = notes::get_setting(&db, "last_sync_at")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if theirs.updated_at > cur {
+        notes::set_setting(&db, "last_sync_at", &theirs.updated_at.to_string())
+            .map_err(|e| e.to_string())?;
     }
+    Ok(result)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -265,6 +276,7 @@ pub fn run() {
             let proxy_url = notes::get_setting(&conn, "steam_proxy_url").unwrap_or_default();
             pricing::apply_proxy(&proxy_mode, &proxy_url);
             app.manage(AppState { db: Mutex::new(conn) });
+            app.manage(subtitle_ocr::OcrState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -326,6 +338,17 @@ pub fn run() {
             wishlist::wishlist_sync,
             wishlist::wishlist_unseen_count,
             wishlist::wishlist_mark_seen,
+            subtitle_ocr::subtitle_ocr_pick_video,
+            subtitle_ocr::subtitle_ocr_check_env,
+            subtitle_ocr::subtitle_ocr_check_deps,
+            subtitle_ocr::subtitle_ocr_install_deps,
+            subtitle_ocr::subtitle_ocr_get_python,
+            subtitle_ocr::subtitle_ocr_set_python,
+            subtitle_ocr::subtitle_ocr_pick_python,
+            subtitle_ocr::subtitle_ocr_extract_frame,
+            subtitle_ocr::subtitle_ocr_read_text,
+            subtitle_ocr::subtitle_ocr_start,
+            subtitle_ocr::subtitle_ocr_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

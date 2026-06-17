@@ -402,10 +402,28 @@ export default function Notes() {
       } else {
         setConflicts([]);
         setConflictIdx(0);
-        setSyncStatus("冲突已全部解决");
+        setSyncStatus("冲突已解决，正在推送…");
+        await handleSync(); // 再同步一次把"保留本地/副本"的版本推到服务器
       }
     } catch (e) {
       setSyncStatus(`解决冲突失败：${e}`);
+    }
+  }
+
+  // 批量解决（一次性把所有冲突都按同一选择处理，便于一键清理）
+  async function resolveAll(choice: "mine" | "theirs") {
+    const list = conflicts;
+    try {
+      for (const c of list) {
+        await invoke<string>("resolve_conflict", { mine: c.mine, theirs: c.theirs, choice });
+      }
+      setNotes(await invoke<Note[]>("get_notes"));
+      setConflicts([]);
+      setConflictIdx(0);
+      setSyncStatus("冲突已批量解决，正在推送…");
+      await handleSync();
+    } catch (e) {
+      setSyncStatus(`批量解决失败：${e}`);
     }
   }
 
@@ -949,6 +967,19 @@ export default function Notes() {
                 两个都保留
               </button>
             </div>
+
+            {/* 批量处理（冲突较多时一键清理，例如升级后的首次同步）*/}
+            {conflicts.length > 1 && (
+              <div className="shrink-0 flex items-center gap-3 border-t border-zinc-800 px-6 py-2.5 text-xs">
+                <span className="text-zinc-500">全部 {conflicts.length} 条：</span>
+                <button onClick={() => resolveAll("mine")} className="rounded-md border border-blue-700 px-2.5 py-1 text-blue-400 hover:bg-blue-600/15">
+                  全部保留本机（覆盖服务器）
+                </button>
+                <button onClick={() => resolveAll("theirs")} className="rounded-md border border-zinc-700 px-2.5 py-1 text-zinc-300 hover:bg-zinc-700">
+                  全部用服务器
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

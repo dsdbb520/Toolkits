@@ -30,3 +30,5 @@ sync-server/Cargo.lock
 *.njsproj
 *.sln
 *.sw?
+
+__pycache__/
