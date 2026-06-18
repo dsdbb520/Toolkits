@@ -590,11 +590,11 @@ pub async fn subtitle_ocr_start(
         video_path: video_path.clone(),
         output_path: out_path.clone(),
         subtitle_region,
-        sample_fps: sample_fps.unwrap_or(4.0),
+        sample_fps: sample_fps.unwrap_or(8.0),
         engine: engine.unwrap_or_else(|| "rapidocr".to_string()),
         language: map_language(&language),
         similarity_threshold: similarity_threshold.unwrap_or(0.90),
-        min_duration: min_duration.unwrap_or(0.4),
+        min_duration: min_duration.unwrap_or(0.15),
         max_gap: max_gap.unwrap_or(0.4),
         min_confidence: min_confidence.unwrap_or(0.6),
     };

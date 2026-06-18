@@ -20,7 +20,7 @@ class VideoReader:
         self.duration = self.frame_count / self.fps if self.frame_count else 0.0
 
     def sample_count(self, sample_fps: float) -> int:
-        step = max(1, round(self.fps / max(0.1, sample_fps)))
+        step = max(1, int(self.fps / max(0.1, sample_fps)))
         if self.frame_count <= 0:
             return 0
         return (self.frame_count + step - 1) // step
@@ -30,7 +30,7 @@ class VideoReader:
 
         用 grab() 廉价跳帧，只在采样点 retrieve()，避免逐帧解码开销。
         """
-        step = max(1, round(self.fps / max(0.1, sample_fps)))
+        step = max(1, int(self.fps / max(0.1, sample_fps)))
         idx = 0
         while True:
             grabbed = self.cap.grab()

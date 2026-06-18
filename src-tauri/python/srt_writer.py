@@ -15,13 +15,13 @@ def _fmt_time(seconds: float) -> str:
 
 
 def write_srt(segments: List[SubtitleSegment], output_path: str) -> int:
-    """写 SRT，返回写入的字幕条数。"""
+    """以 UTF-8 写 SRT，返回写入的字幕条数。"""
     lines = []
     for i, seg in enumerate(segments, start=1):
         lines.append(str(i))
         lines.append(f"{_fmt_time(seg.start)} --> {_fmt_time(seg.end)}")
         lines.append(seg.text)
         lines.append("")  # 条目间空行
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    with open(output_path, "w", encoding="utf-8", newline="") as f:
+        f.write("\r\n".join(lines))
     return len(segments)

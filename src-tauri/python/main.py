@@ -35,7 +35,7 @@ def run(config: dict):
     # 延迟导入，import 失败也能作为 error 反馈
     from models import OcrFrameResult
     from video_reader import VideoReader
-    from image_preprocess import preprocess, roi_signature, signature_diff
+    from image_preprocess import preprocess, roi_signature, signature_changed
     from ocr_engine import create_engine
     from text_normalizer import normalize
     from subtitle_aligner import align
@@ -46,11 +46,11 @@ def run(config: dict):
     region = config["subtitle_region"]
     # sample_fps 现在是「扫描帧率」：每秒读多少帧做廉价的变化检测（抓住短字幕），
     # 真正的 OCR 只在字幕区域发生变化时才跑。所以扫描率可以开高而不至于太慢。
-    sample_fps = float(config.get("sample_fps", 4.0))
+    sample_fps = float(config.get("sample_fps", 8.0))
     language = config.get("language", "ch")
     engine_name = config.get("engine", "rapidocr")
     similarity_threshold = float(config.get("similarity_threshold", 0.90))
-    min_duration = float(config.get("min_duration", 0.4))
+    min_duration = float(config.get("min_duration", 0.15))
     max_gap = float(config.get("max_gap", 0.4))
     min_confidence = float(config.get("min_confidence", 0.6))
 
@@ -69,16 +69,42 @@ def run(config: dict):
     emit_every = max(1, total // 200) if total else 10  # 控制消息频率
 
     # 帧变化检测：ROI 与上一扫描点几乎相同 → 字幕没变，直接复用结果、跳过 OCR。
-    # 字幕通常停留 1~3 秒，这能省掉绝大部分重复识别。CHANGE_THRESH 越小越敏感。
-    CHANGE_THRESH = 6.0
+    # 固定背景视频还会记录一份“空字幕背景”，用更敏感的背景差分抓短字幕。
     prev_sig = None
     prev_text, prev_conf = "", 0.0
+    background_sig = None
+    blank_stable_count = 0
 
     for ts, frame in reader.iter_samples(sample_fps):
         roi = VideoReader.crop_region(frame, region)
         sig = roi_signature(roi)
 
-        if prev_sig is not None and signature_diff(sig, prev_sig) < CHANGE_THRESH:
+        changed_from_prev = prev_sig is None or signature_changed(sig, prev_sig)
+        changed_from_bg = (
+            background_sig is not None
+            and not prev_text
+            and signature_changed(
+                sig,
+                background_sig,
+                mean_threshold=0.9,
+                top_threshold=7.0,
+                ratio_threshold=0.002,
+            )
+        )
+        returned_to_bg = (
+            background_sig is not None
+            and bool(prev_text)
+            and not signature_changed(
+                sig,
+                background_sig,
+                mean_threshold=0.9,
+                top_threshold=7.0,
+                ratio_threshold=0.002,
+            )
+        )
+        should_ocr = changed_from_prev or changed_from_bg or returned_to_bg
+
+        if not should_ocr:
             # 与上一帧几乎一致：复用，不跑 OCR
             text, conf = prev_text, prev_conf
         else:
@@ -87,6 +113,19 @@ def run(config: dict):
             text = normalize(text)
             ocr_calls += 1
             prev_text, prev_conf = text, conf
+
+        if text:
+            blank_stable_count = 0
+        elif not should_ocr:
+            blank_stable_count += 1
+        elif prev_sig is None:
+            blank_stable_count = 1
+        else:
+            blank_stable_count = 0
+
+        if background_sig is None and blank_stable_count >= 2:
+            background_sig = sig.copy()
+            log("[诊断] 已记录空字幕背景，启用固定背景差分")
 
         prev_sig = sig
         frames.append(OcrFrameResult(time=ts, text=text, confidence=conf))

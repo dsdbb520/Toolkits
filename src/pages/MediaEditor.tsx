@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Film, Music, Scissors, RefreshCw, FolderOpen,
   Loader2, CheckCircle2, AlertCircle, Upload, X,
-  Play, Pause, SkipBack, Save, FilePen,
+  Play, Pause, SkipBack, Save, FilePen, FileText,
 } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -104,6 +104,12 @@ export default function MediaEditor() {
   const [convertResult, setConvertResult] = useState("");
   const [convertError, setConvertError] = useState("");
 
+  // Embed lyrics into audio metadata
+  const [subtitlePath, setSubtitlePath] = useState("");
+  const [embedState, setEmbedState] = useState<ProcessState>("idle");
+  const [embedResult, setEmbedResult] = useState("");
+  const [embedError, setEmbedError] = useState("");
+
   // Keep refs in sync for drag callbacks
   useEffect(() => { startRef.current = startSecs; }, [startSecs]);
   useEffect(() => { endRef.current = endSecs; }, [endSecs]);
@@ -150,6 +156,8 @@ export default function MediaEditor() {
     setTrimState("idle"); setTrimResult(""); setTrimError("");
     setExtractState("idle"); setExtractResult(""); setExtractError("");
     setConvertState("idle"); setConvertResult(""); setConvertError("");
+    setSubtitlePath("");
+    setEmbedState("idle"); setEmbedResult(""); setEmbedError("");
   };
 
   useEffect(() => {
@@ -274,6 +282,29 @@ export default function MediaEditor() {
       });
       setConvertResult(out); setConvertState("done");
     } catch (e) { setConvertError(String(e)); setConvertState("error"); }
+  };
+
+  // ─── Embed lyrics op ────────────────────────────────────────
+
+  const handlePickSubtitle = async () => {
+    const p = await invoke<string | null>("media_open_subtitle_file");
+    if (!p) return;
+    setSubtitlePath(p);
+    setEmbedState("idle");
+    setEmbedResult("");
+    setEmbedError("");
+  };
+
+  const handleEmbedSubtitle = async () => {
+    if (!mediaInfo || !subtitlePath) return;
+    setEmbedState("processing"); setEmbedError("");
+    try {
+      const out = await invoke<string>("media_embed_lyrics", {
+        audioPath: mediaInfo.path,
+        subtitlePath,
+      });
+      setEmbedResult(out); setEmbedState("done");
+    } catch (e) { setEmbedError(String(e)); setEmbedState("error"); }
   };
 
   const convertFormats = mediaInfo?.is_audio_only
@@ -521,7 +552,7 @@ export default function MediaEditor() {
 
               {/* ── Extract audio ── */}
               {!mediaInfo.is_audio_only && (
-                <OpCard icon={<Music size={14} />} title="提取音频" desc="仅提取音轨，转换为目标格式">
+                <OpCard icon={<Music size={14} />} title="视频转音频" desc="提取音轨并转换为目标格式">
                   <div className="flex flex-wrap items-center gap-3">
                     <select
                       value={extractFmt}
@@ -544,6 +575,37 @@ export default function MediaEditor() {
                     </button>
                   </div>
                   <OpResult state={extractState} result={extractResult} error={extractError} originalPath={mediaInfo?.path} />
+                </OpCard>
+              )}
+
+              {/* ── Embed lyrics into audio ── */}
+              {mediaInfo.is_audio_only && (
+                <OpCard icon={<FileText size={14} />} title="内嵌歌词" desc="写入歌词元数据，并生成同名 LRC">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={handlePickSubtitle}
+                      className="flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
+                    >
+                      <Upload size={13} />
+                      {subtitlePath ? "更换文件" : "选择字幕/歌词"}
+                    </button>
+                    {subtitlePath && (
+                      <span className="min-w-0 max-w-md truncate text-xs text-zinc-500" title={subtitlePath}>
+                        {subtitlePath.split(/[\\/]/).pop()}
+                      </span>
+                    )}
+                    <button
+                      onClick={handleEmbedSubtitle}
+                      disabled={!subtitlePath || embedState === "processing"}
+                      className="ml-auto flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                    >
+                      {embedState === "processing"
+                        ? <Loader2 size={13} className="animate-spin" />
+                        : <FileText size={13} />}
+                      写入歌词
+                    </button>
+                  </div>
+                  <OpResult state={embedState} result={embedResult} error={embedError} />
                 </OpCard>
               )}
 

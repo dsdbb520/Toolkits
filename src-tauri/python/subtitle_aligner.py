@@ -81,9 +81,10 @@ def align(
         if current is not None:
             stats["buckets"] += 1
             seg = current.best(min_confidence)
+            effective_min_duration = min(min_duration, current.sample_interval)
             if seg is None:
                 stats["dropped_lowconf"] += 1  # 投票后无文本过 min_confidence / 全是噪声
-            elif (seg.end - seg.start) < min_duration:
+            elif (seg.end - seg.start) < effective_min_duration:
                 stats["dropped_short"] += 1
             else:
                 # 与上一段若文本相同且时间相接，则合并

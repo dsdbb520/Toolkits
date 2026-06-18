@@ -96,7 +96,7 @@ export default function SubtitleOcr() {
 
   // 参数
   const [language, setLanguage] = useState("ch");
-  const [sampleFps, setSampleFps] = useState(4);
+  const [sampleFps, setSampleFps] = useState(8);
   const [similarity, setSimilarity] = useState(0.9);
 
   // 运行
@@ -387,9 +387,9 @@ export default function SubtitleOcr() {
           </Field>
 
           <Field label={`扫描帧率：${sampleFps} fps`}>
-            <input type="range" min={1} max={10} step={1} value={sampleFps}
+            <input type="range" min={1} max={16} step={1} value={sampleFps}
               onChange={(e) => setSampleFps(Number(e.target.value))} className="w-full accent-blue-500" />
-            <p className="mt-1 text-xs text-zinc-600">每秒检查几次字幕区域。OCR 只在字幕变化时才跑，所以调高主要是为了不漏短字幕，开销不大</p>
+            <p className="mt-1 text-xs text-zinc-600">每秒检查几次字幕区域。短字幕建议 8~16；OCR 只在字幕变化时才跑</p>
           </Field>
 
           <Field label={`相似度阈值：${similarity.toFixed(2)}`}>

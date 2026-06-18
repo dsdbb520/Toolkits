@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{fs, path::Path};
 
 use crate::bili::find_ffmpeg;
 
@@ -86,6 +86,19 @@ async fn run_ffmpeg_async(ffmpeg: &str, args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+async fn run_ffmpeg_owned(ffmpeg: &str, args: &[String]) -> Result<(), String> {
+    let out = tokio::process::Command::new(ffmpeg)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| format!("ffmpeg 启动失败: {}", e))?;
+    if !out.status.success() {
+        let msg = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("ffmpeg 失败: {}", &msg[..msg.len().min(400)]));
+    }
+    Ok(())
+}
+
 fn parse_fps(r_frame_rate: &str) -> String {
     if r_frame_rate.is_empty() { return String::new(); }
     let parts: Vec<&str> = r_frame_rate.split('/').collect();
@@ -115,6 +128,140 @@ fn file_ext(path: &str) -> String {
         .to_lowercase()
 }
 
+fn clean_lyric_text(text: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    let mut in_brace = false;
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            '{' => in_brace = true,
+            '}' if in_brace => in_brace = false,
+            '\\' => {
+                if matches!(chars.peek(), Some('N') | Some('n')) {
+                    let _ = chars.next();
+                    out.push(' ');
+                } else if !in_tag && !in_brace {
+                    out.push(ch);
+                }
+            }
+            _ if !in_tag && !in_brace => out.push(ch),
+            _ => {}
+        }
+    }
+
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn timestamp_to_lrc(ts: &str) -> Option<String> {
+    let normalized = ts.trim().replace(',', ".");
+    let parts: Vec<&str> = normalized.split(':').collect();
+    let (minutes, seconds) = match parts.as_slice() {
+        [h, m, s] => {
+            let h = h.trim().parse::<u32>().ok()?;
+            let m = m.trim().parse::<u32>().ok()?;
+            (h * 60 + m, *s)
+        }
+        [m, s] => {
+            let m = m.trim().parse::<u32>().ok()?;
+            (m, *s)
+        }
+        _ => return None,
+    };
+
+    let sec_parts: Vec<&str> = seconds.trim().split('.').collect();
+    let sec = sec_parts.first()?.parse::<u32>().ok()?;
+    let centis = sec_parts
+        .get(1)
+        .map(|frac| {
+            let mut s = frac.chars().take(2).collect::<String>();
+            while s.len() < 2 { s.push('0'); }
+            s.parse::<u32>().unwrap_or(0)
+        })
+        .unwrap_or(0);
+
+    Some(format!("[{:02}:{:02}.{:02}]", minutes, sec, centis.min(99)))
+}
+
+fn parse_timed_text(content: &str) -> String {
+    let mut lines = Vec::new();
+    let mut iter = content.lines().peekable();
+
+    while let Some(line) = iter.next() {
+        if !line.contains("-->") {
+            continue;
+        }
+
+        let start = line.split("-->").next().unwrap_or("").trim();
+        let Some(tag) = timestamp_to_lrc(start) else { continue };
+
+        let mut text_lines = Vec::new();
+        while let Some(next) = iter.peek() {
+            let t = next.trim();
+            if t.is_empty() || t.contains("-->") {
+                break;
+            }
+            if t != "WEBVTT" && t.parse::<usize>().is_err() {
+                let cleaned = clean_lyric_text(t);
+                if !cleaned.is_empty() {
+                    text_lines.push(cleaned);
+                }
+            }
+            let _ = iter.next();
+        }
+
+        let text = text_lines.join(" ");
+        if !text.is_empty() {
+            lines.push(format!("{}{}", tag, text));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn parse_ass_text(content: &str) -> String {
+    let mut lines = Vec::new();
+    for line in content.lines() {
+        let Some(rest) = line.strip_prefix("Dialogue:") else { continue };
+        let parts: Vec<&str> = rest.trim_start().splitn(10, ',').collect();
+        if parts.len() < 10 {
+            continue;
+        }
+        let Some(tag) = timestamp_to_lrc(parts[1]) else { continue };
+        let text = clean_lyric_text(parts[9]);
+        if !text.is_empty() {
+            lines.push(format!("{}{}", tag, text));
+        }
+    }
+    lines.join("\n")
+}
+
+fn subtitle_to_lyrics(path: &str) -> Result<String, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("读取字幕失败: {}", e))?;
+    let ext = file_ext(path);
+    let lyrics = match ext.as_str() {
+        "lrc" => content,
+        "ass" | "ssa" => parse_ass_text(&content),
+        "srt" | "vtt" => parse_timed_text(&content),
+        _ => content
+            .lines()
+            .map(clean_lyric_text)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+
+    let lyrics = lyrics.trim().to_string();
+    if lyrics.is_empty() {
+        return Err("字幕文件里没有可写入歌词的文本".into());
+    }
+    Ok(lyrics)
+}
+
 // ─── Commands ─────────────────────────────────────────────────
 
 #[tauri::command]
@@ -125,6 +272,17 @@ pub async fn media_open_file() -> Option<String> {
             "媒体文件",
             &["mp4", "mkv", "avi", "mov", "flv", "webm", "mp3", "aac", "flac", "wav", "m4a", "ogg"],
         )
+        .add_filter("所有文件", &["*"])
+        .pick_file()
+        .await
+        .map(|h| h.path().to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn media_open_subtitle_file() -> Option<String> {
+    rfd::AsyncFileDialog::new()
+        .set_title("选择字幕/歌词文件")
+        .add_filter("字幕/歌词文件", &["srt", "ass", "ssa", "vtt", "lrc", "txt"])
         .add_filter("所有文件", &["*"])
         .pick_file()
         .await
@@ -243,4 +401,50 @@ pub async fn media_process(
     };
 
     Ok(out_path)
+}
+
+#[tauri::command]
+pub async fn media_embed_lyrics(
+    audio_path: String,
+    subtitle_path: String,
+) -> Result<String, String> {
+    let ffmpeg = find_ffmpeg()
+        .ok_or("未找到 ffmpeg，请先安装: brew install ffmpeg")?;
+
+    let audio_ext = file_ext(&audio_path);
+    if !matches!(audio_ext.as_str(), "mp3" | "wav" | "flac" | "aac" | "m4a" | "ogg") {
+        return Err("请选择音频文件（MP3/WAV/FLAC/AAC/M4A/OGG）".into());
+    }
+
+    let subtitle_ext = file_ext(&subtitle_path);
+    if !matches!(subtitle_ext.as_str(), "srt" | "ass" | "ssa" | "vtt" | "lrc" | "txt") {
+        return Err("请选择字幕/歌词文件（SRT/ASS/SSA/VTT/LRC/TXT）".into());
+    }
+
+    let lyrics = subtitle_to_lyrics(&subtitle_path)?;
+    let out = output_path_for(&audio_path, "_with_lyrics", &audio_ext);
+    let lrc_out = output_path_for(&audio_path, "_with_lyrics", "lrc");
+    fs::write(&lrc_out, format!("{}\n", lyrics))
+        .map_err(|e| format!("写同名 LRC 失败: {}", e))?;
+
+    let mut args: Vec<String> = vec![
+        "-i".into(), audio_path.clone(),
+        "-map".into(), "0".into(),
+        "-c".into(), "copy".into(),
+    ];
+
+    // 不同播放器认的字段差异很大：MP3 常见是 USLT/TXXX，FLAC/OGG 常见是 Vorbis comments。
+    // ffmpeg 会把部分标准字段映射到容器对应的歌词帧；其余字段作为通用 tag 保留。
+    for key in ["lyrics", "LYRICS", "Lyrics", "UNSYNCEDLYRICS", "unsyncedlyrics"] {
+        args.push("-metadata".into());
+        args.push(format!("{}={}", key, lyrics));
+    }
+
+    if audio_ext == "mp3" {
+        args.extend(["-id3v2_version".into(), "3".into()]);
+    }
+    args.extend(["-y".into(), out.clone()]);
+
+    run_ffmpeg_owned(&ffmpeg, &args).await?;
+    Ok(out)
 }
